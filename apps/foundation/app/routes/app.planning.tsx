@@ -5,8 +5,9 @@ import type { Route } from "./+types/app.planning";
 import { getAppEnv } from "../context";
 import { requireAuth, syncUserProfile } from "../auth";
 import { withDb } from "../db/client";
-import { shifts, shiftTypes, seedDefaultShiftTypes, type ShiftType } from "../db/schema/planning";
+import { shifts, shiftTypes, recurringShifts, seedDefaultShiftTypes, type ShiftType } from "../db/schema/planning";
 import { calculateShiftDuration } from "../domain/planning/shifts";
+import { validateRecurrenceRule, generateOccurrenceDates } from "../domain/planning/recurrence";
 import { createAnalyticsService } from "../services/analytics";
 
 export function meta() {
@@ -115,6 +116,21 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     } | null;
   }> = [];
 
+  let recurringShiftsList: Array<{
+    id: string;
+    shiftTypeId: string | null;
+    name: string | null;
+    frequency: string;
+    interval: number;
+    daysOfWeek: any;
+    startDate: string;
+    endDate: string | null;
+    isActive: boolean;
+    startTime: string | null;
+    endTime: string | null;
+    notes: string | null;
+  }> = [];
+
   if (env.HYPERDRIVE) {
     const profile = await syncUserProfile(env.HYPERDRIVE, user);
     if (profile) {
@@ -133,6 +149,25 @@ export async function loader({ request, context }: Route.LoaderArgs) {
           })
           .from(shiftTypes)
           .where(or(eq(shiftTypes.profileId, profile.id), isNull(shiftTypes.profileId)));
+
+        recurringShiftsList = await db
+          .select({
+            id: recurringShifts.id,
+            shiftTypeId: recurringShifts.shiftTypeId,
+            name: recurringShifts.name,
+            frequency: recurringShifts.frequency,
+            interval: recurringShifts.interval,
+            daysOfWeek: recurringShifts.daysOfWeek,
+            startDate: recurringShifts.startDate,
+            endDate: recurringShifts.endDate,
+            isActive: recurringShifts.isActive,
+            startTime: recurringShifts.startTime,
+            endTime: recurringShifts.endTime,
+            notes: recurringShifts.notes,
+          })
+          .from(recurringShifts)
+          .where(eq(recurringShifts.profileId, profile.id))
+          .orderBy(asc(recurringShifts.startDate));
 
         const rawShifts = await db
           .select({
@@ -202,6 +237,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     currentMonth,
     shiftTypesList,
     shiftsList,
+    recurringShiftsList,
   };
 }
 
@@ -410,11 +446,231 @@ export async function action({ request, context }: Route.ActionArgs) {
     }
   }
 
+  if (intent === "create_recurring_shift") {
+    const shiftTypeId = formData.get("shiftTypeId")?.toString().trim();
+    const frequency = formData.get("frequency")?.toString().trim() || "weekly";
+    const interval = parseInt(formData.get("interval")?.toString() || "1", 10);
+    const startDate = formData.get("startDate")?.toString().trim();
+    const endDate = formData.get("endDate")?.toString().trim() || null;
+    const startTime = formData.get("startTime")?.toString().trim() || null;
+    const endTime = formData.get("endTime")?.toString().trim() || null;
+    const notes = formData.get("notes")?.toString().trim() || null;
+
+    const rawDays = formData.getAll("daysOfWeek");
+    let daysOfWeek: number[] = [];
+    if (rawDays.length > 0) {
+      daysOfWeek = rawDays
+        .flatMap((d) => d.toString().split(","))
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => !isNaN(n) && n >= 0 && n <= 6);
+    }
+
+    if (!shiftTypeId) {
+      return { error: "Veuillez sélectionner un type de garde." };
+    }
+    if (!startDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+      return { error: "Veuillez indiquer une date de début valide (YYYY-MM-DD)." };
+    }
+
+    const ruleVal = validateRecurrenceRule({
+      startDate,
+      endDate: endDate || undefined,
+      frequency,
+      interval,
+      daysOfWeek,
+    });
+
+    if (!ruleVal.success) {
+      return { error: ruleVal.error.message || "Règle de récurrence invalide." };
+    }
+
+    let rangeTo = endDate;
+    if (!rangeTo) {
+      const sObj = new Date(startDate);
+      sObj.setDate(sObj.getDate() + 90);
+      rangeTo = sObj.toISOString().split("T")[0];
+    }
+
+    const genRes = generateOccurrenceDates(
+      {
+        startDate,
+        endDate: endDate || undefined,
+        frequency,
+        interval,
+        daysOfWeek,
+      },
+      {
+        from: startDate,
+        to: rangeTo,
+      },
+    );
+
+    if (!genRes.success) {
+      return { error: genRes.error.message || "Erreur lors de la génération des gardes récurrentes." };
+    }
+
+    const occurrences = genRes.occurrences;
+    if (occurrences.length === 0) {
+      return { error: "Aucune occurrence générée pour les dates indiquées." };
+    }
+
+    let createdCount = 0;
+    let ruleId: string | null = null;
+
+    try {
+      await withDb(env.HYPERDRIVE, async (db) => {
+        const validShiftType = await db
+          .select({
+            id: shiftTypes.id,
+            name: shiftTypes.name,
+            startTime: shiftTypes.startTime,
+            endTime: shiftTypes.endTime,
+          })
+          .from(shiftTypes)
+          .where(
+            and(
+              eq(shiftTypes.id, shiftTypeId),
+              or(eq(shiftTypes.profileId, profile.id), isNull(shiftTypes.profileId)),
+            ),
+          )
+          .limit(1);
+
+        if (validShiftType.length === 0) {
+          throw new Error("Type de garde invalide ou non autorisé.");
+        }
+
+        const st = validShiftType[0];
+        const finalStart = startTime || st.startTime;
+        const finalEnd = endTime || st.endTime;
+
+        const insertedRule = await db
+          .insert(recurringShifts)
+          .values({
+            profileId: profile.id,
+            shiftTypeId,
+            name: st.name,
+            frequency,
+            interval,
+            daysOfWeek,
+            startDate,
+            endDate: endDate || null,
+            startTime: finalStart,
+            endTime: finalEnd,
+            isActive: true,
+            notes,
+          })
+          .returning({ id: recurringShifts.id });
+
+        if (insertedRule.length > 0) {
+          ruleId = insertedRule[0].id;
+        }
+
+        const existingShifts = await db
+          .select({ date: shifts.date })
+          .from(shifts)
+          .where(
+            and(
+              eq(shifts.profileId, profile.id),
+              gte(shifts.date, startDate),
+              lte(shifts.date, rangeTo),
+            ),
+          );
+
+        const existingDateSet = new Set(existingShifts.map((s) => s.date));
+        const datesToInsert = occurrences.filter((d) => !existingDateSet.has(d));
+
+        if (datesToInsert.length > 0) {
+          const rowsToInsert = datesToInsert.map((d) => ({
+            profileId: profile.id,
+            shiftTypeId,
+            date: d,
+            startTime: finalStart,
+            endTime: finalEnd,
+            notes,
+          }));
+
+          await db.insert(shifts).values(rowsToInsert);
+          createdCount = rowsToInsert.length;
+        }
+      });
+
+      if (ruleId) {
+        try {
+          const analytics = createAnalyticsService(env);
+          await analytics.track({
+            distinctId: profile.id,
+            event: "recurring_shift_created",
+            properties: {
+              recurring_shift_id: ruleId,
+              shift_type_id: shiftTypeId,
+              occurrences_count: createdCount,
+            },
+          });
+        } catch {
+          // Analytics error ignored
+        }
+      }
+
+      return {
+        success: true,
+        message: `Roulement récurrent créé avec succès (${createdCount} garde(s) ajoutée(s) au planning).`,
+      };
+    } catch (err: any) {
+      return { error: err.message || "Impossible de créer le roulement récurrent." };
+    }
+  }
+
+  if (intent === "delete_recurring_shift") {
+    const recurringShiftId = formData.get("recurringShiftId")?.toString().trim();
+    if (!recurringShiftId) {
+      return { error: "Identifiant de roulement récurrent manquant." };
+    }
+
+    try {
+      await withDb(env.HYPERDRIVE, async (db) => {
+        const existing = await db
+          .select({ id: recurringShifts.id })
+          .from(recurringShifts)
+          .where(and(eq(recurringShifts.id, recurringShiftId), eq(recurringShifts.profileId, profile.id)))
+          .limit(1);
+
+        if (existing.length === 0) {
+          throw new Error("Roulement récurrent non trouvé ou accès refusé.");
+        }
+
+        await db
+          .delete(recurringShifts)
+          .where(and(eq(recurringShifts.id, recurringShiftId), eq(recurringShifts.profileId, profile.id)));
+      });
+
+      try {
+        const analytics = createAnalyticsService(env);
+        await analytics.track({
+          distinctId: profile.id,
+          event: "recurring_shift_deleted",
+          properties: {
+            recurring_shift_id: recurringShiftId,
+          },
+        });
+      } catch {
+        // Analytics error ignored
+      }
+
+      return {
+        success: true,
+        message: "Roulement récurrent supprimé. Cette action n'efface pas les gardes déjà créées dans le planning.",
+      };
+    } catch (err: any) {
+      return { error: err.message || "Impossible de supprimer le roulement récurrent." };
+    }
+  }
+
   return { error: "Action non reconnue." };
 }
 
 export default function Planning() {
-  const { currentMonth, shiftTypesList, shiftsList } = useLoaderData<typeof loader>();
+  const { currentMonth, shiftTypesList, shiftsList, recurringShiftsList } =
+    useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
@@ -422,19 +678,21 @@ export default function Planning() {
   const [yearNum, monthNum] = currentMonth.split("-").map(Number);
   const calendarDays = getDaysForCalendarMonth(yearNum, monthNum);
 
-  const prevMonth = monthNum === 1
-    ? `${yearNum - 1}-12`
-    : `${yearNum}-${String(monthNum - 1).padStart(2, "0")}`;
+  const prevMonth =
+    monthNum === 1
+      ? `${yearNum - 1}-12`
+      : `${yearNum}-${String(monthNum - 1).padStart(2, "0")}`;
 
-  const nextMonth = monthNum === 12
-    ? `${yearNum + 1}-01`
-    : `${yearNum}-${String(monthNum + 1).padStart(2, "0")}`;
+  const nextMonth =
+    monthNum === 12
+      ? `${yearNum + 1}-01`
+      : `${yearNum}-${String(monthNum + 1).padStart(2, "0")}`;
 
   const today = new Date();
   const todayMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
 
-  // Modal State
+  // Single Shift Modal State
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<"create" | "edit">("create");
   const [selectedShift, setSelectedShift] = useState<{
@@ -452,10 +710,38 @@ export default function Planning() {
     notes: "",
   });
 
-  // Close modal when submission completes successfully
+  // Recurring Shift Modal States
+  const [recurringModalOpen, setRecurringModalOpen] = useState(false);
+  const [manageRecurringModalOpen, setManageRecurringModalOpen] = useState(false);
+
+  const [recurringForm, setRecurringForm] = useState<{
+    shiftTypeId: string;
+    frequency: "weekly" | "daily";
+    interval: number;
+    daysOfWeek: number[];
+    startDate: string;
+    endDate: string;
+    startTime: string;
+    endTime: string;
+    notes: string;
+  }>({
+    shiftTypeId: shiftTypesList[0]?.id || "",
+    frequency: "weekly",
+    interval: 1,
+    daysOfWeek: [1, 3, 5],
+    startDate: todayStr,
+    endDate: "",
+    startTime: shiftTypesList[0]?.startTime || "",
+    endTime: shiftTypesList[0]?.endTime || "",
+    notes: "",
+  });
+
+  // Close modals when submission completes successfully
   useEffect(() => {
     if (actionData?.success) {
       setModalOpen(false);
+      setRecurringModalOpen(false);
+      setManageRecurringModalOpen(false);
     }
   }, [actionData]);
 
@@ -471,6 +757,22 @@ export default function Planning() {
     });
     setModalMode("create");
     setModalOpen(true);
+  };
+
+  const handleOpenRecurringCreate = () => {
+    const defaultType = shiftTypesList[0];
+    setRecurringForm({
+      shiftTypeId: defaultType?.id || "",
+      frequency: "weekly",
+      interval: 1,
+      daysOfWeek: [1, 3, 5],
+      startDate: todayStr,
+      endDate: "",
+      startTime: defaultType?.startTime || "",
+      endTime: defaultType?.endTime || "",
+      notes: "",
+    });
+    setRecurringModalOpen(true);
   };
 
   const handleOpenEdit = (shiftItem: (typeof shiftsList)[0]) => {
@@ -496,13 +798,58 @@ export default function Planning() {
     }));
   };
 
-  // Duration computation for live preview inside modal
+  const handleRecurringShiftTypeChange = (newTypeId: string) => {
+    const selectedType = shiftTypesList.find((st) => st.id === newTypeId);
+    setRecurringForm((prev) => ({
+      ...prev,
+      shiftTypeId: newTypeId,
+      startTime: selectedType?.startTime || "",
+      endTime: selectedType?.endTime || "",
+    }));
+  };
+
+  const handleDayToggle = (dayNum: number) => {
+    setRecurringForm((prev) => {
+      const exists = prev.daysOfWeek.includes(dayNum);
+      const updated = exists
+        ? prev.daysOfWeek.filter((d) => d !== dayNum)
+        : [...prev.daysOfWeek, dayNum].sort((a, b) => a - b);
+      return { ...prev, daysOfWeek: updated };
+    });
+  };
+
+  // Duration computation for live preview inside single shift modal
   const liveDurationResult =
     selectedShift.startTime && selectedShift.endTime
       ? calculateShiftDuration({
           startTime: selectedShift.startTime,
           endTime: selectedShift.endTime,
         })
+      : null;
+
+  // Recurrence occurrence dates preview calculation
+  let previewRangeTo = recurringForm.endDate;
+  if (!previewRangeTo && recurringForm.startDate) {
+    const sObj = new Date(recurringForm.startDate);
+    sObj.setDate(sObj.getDate() + 90);
+    previewRangeTo = sObj.toISOString().split("T")[0];
+  }
+
+  const recurrencePreview =
+    recurringForm.startDate && previewRangeTo
+      ? generateOccurrenceDates(
+          {
+            startDate: recurringForm.startDate,
+            endDate: recurringForm.endDate || undefined,
+            frequency: recurringForm.frequency,
+            interval: recurringForm.interval,
+            daysOfWeek: recurringForm.daysOfWeek,
+          },
+          {
+            from: recurringForm.startDate,
+            to: previewRangeTo,
+          },
+        )
       : null;
 
   return (
@@ -543,12 +890,34 @@ export default function Planning() {
             →
           </Link>
 
+          {recurringShiftsList.length > 0 && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setManageRecurringModalOpen(true)}
+              id="btn-manage-recurring"
+              style={{ marginLeft: "0.25rem" }}
+            >
+              📋 Roulements ({recurringShiftsList.length})
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={handleOpenRecurringCreate}
+            id="btn-add-recurring"
+            style={{ marginLeft: "0.25rem" }}
+          >
+            🔄 Roulement récurrent
+          </button>
+
           <button
             type="button"
             className="btn btn-primary btn-sm"
             onClick={() => handleOpenCreate()}
             id="btn-add-shift"
-            style={{ marginLeft: "0.5rem" }}
+            style={{ marginLeft: "0.25rem" }}
           >
             + Ajouter une garde
           </button>
@@ -666,20 +1035,30 @@ export default function Planning() {
             Aucune garde planifiée pour ce mois
           </h2>
           <p className="empty-planning-desc" id="empty-state-desc">
-            Commencez par ajouter vos gardes ou roulements pour visualiser votre planning et calculer automatiquement vos heures de travail.
+            Commencez par ajouter vos gardes ou roulements récurrents pour visualiser votre planning et calculer automatiquement vos heures de travail.
           </p>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => handleOpenCreate()}
-            id="btn-add-first-shift"
-          >
-            + Ajouter ma première garde
-          </button>
+          <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center" }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => handleOpenCreate()}
+              id="btn-add-first-shift"
+            >
+              + Ajouter ma première garde
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleOpenRecurringCreate}
+              id="btn-add-first-recurring"
+            >
+              🔄 Créer un roulement récurrent
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Modal Dialog for Create / Edit Shift */}
+      {/* Modal Dialog for Create / Edit Single Shift */}
       {modalOpen && (
         <div
           className="modal-backdrop"
@@ -784,7 +1163,6 @@ export default function Planning() {
                   </div>
                 </div>
 
-                {/* Live Duration Calculation Indicator */}
                 {liveDurationResult && (
                   <div className="duration-preview-box" id="shift-duration-preview">
                     {liveDurationResult.success ? (
@@ -860,6 +1238,378 @@ export default function Planning() {
                 </button>
               </div>
             </Form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Dialog for Creating a Recurring Shift */}
+      {recurringModalOpen && (
+        <div
+          className="modal-backdrop"
+          id="recurring-modal-backdrop"
+          onClick={() => setRecurringModalOpen(false)}
+        >
+          <div
+            className="modal-dialog"
+            id="recurring-modal"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: "560px" }}
+          >
+            <div className="modal-header" id="recurring-modal-header">
+              <h2 className="modal-title" id="recurring-modal-title">
+                🔄 Nouveau Roulement Récurrent
+              </h2>
+              <button
+                type="button"
+                className="btn-close-modal"
+                onClick={() => setRecurringModalOpen(false)}
+                id="btn-close-recurring-modal"
+                aria-label="Fermer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <Form method="post" id="recurring-shift-form">
+              <div className="modal-body" id="recurring-modal-body">
+                <input type="hidden" name="intent" value="create_recurring_shift" />
+                {recurringForm.daysOfWeek.map((d) => (
+                  <input key={d} type="hidden" name="daysOfWeek" value={d} />
+                ))}
+
+                <div className="form-group">
+                  <label htmlFor="recurring-form-type" className="form-label">
+                    Type de garde / Roulement *
+                  </label>
+                  <select
+                    id="recurring-form-type"
+                    name="shiftTypeId"
+                    className="form-input"
+                    required
+                    value={recurringForm.shiftTypeId}
+                    onChange={(e) => handleRecurringShiftTypeChange(e.target.value)}
+                  >
+                    {shiftTypesList.map((st) => (
+                      <option key={st.id} value={st.id}>
+                        {st.name} {st.shortCode ? `(${st.shortCode})` : ""}{" "}
+                        {st.startTime ? `[${st.startTime} - ${st.endTime}]` : "[Sans horaire]"}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="time-row">
+                  <div className="form-group">
+                    <label htmlFor="recurring-form-frequency" className="form-label">
+                      Fréquence *
+                    </label>
+                    <select
+                      id="recurring-form-frequency"
+                      name="frequency"
+                      className="form-input"
+                      value={recurringForm.frequency}
+                      onChange={(e) =>
+                        setRecurringForm((prev) => ({
+                          ...prev,
+                          frequency: e.target.value as "weekly" | "daily",
+                        }))
+                      }
+                    >
+                      <option value="weekly">Hebdomadaire (semaines)</option>
+                      <option value="daily">Quotidien (jours)</option>
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="recurring-form-interval" className="form-label">
+                      Intervalle *
+                    </label>
+                    <input
+                      type="number"
+                      id="recurring-form-interval"
+                      name="interval"
+                      className="form-input"
+                      min={1}
+                      max={52}
+                      value={recurringForm.interval}
+                      onChange={(e) =>
+                        setRecurringForm((prev) => ({
+                          ...prev,
+                          interval: Math.max(1, parseInt(e.target.value, 10) || 1),
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+
+                {recurringForm.frequency === "weekly" && (
+                  <div className="form-group">
+                    <label className="form-label">Jours de la semaine de garde *</label>
+                    <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
+                      {[
+                        { num: 1, label: "Lun" },
+                        { num: 2, label: "Mar" },
+                        { num: 3, label: "Mer" },
+                        { num: 4, label: "Jeu" },
+                        { num: 5, label: "Ven" },
+                        { num: 6, label: "Sam" },
+                        { num: 0, label: "Dim" },
+                      ].map((day) => {
+                        const isChecked = recurringForm.daysOfWeek.includes(day.num);
+                        return (
+                          <button
+                            key={day.num}
+                            type="button"
+                            className={`btn btn-sm ${isChecked ? "btn-primary" : "btn-secondary"}`}
+                            onClick={() => handleDayToggle(day.num)}
+                            style={{ minWidth: "42px" }}
+                          >
+                            {day.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="time-row">
+                  <div className="form-group">
+                    <label htmlFor="recurring-form-start-date" className="form-label">
+                      Date de début *
+                    </label>
+                    <input
+                      type="date"
+                      id="recurring-form-start-date"
+                      name="startDate"
+                      className="form-input"
+                      required
+                      value={recurringForm.startDate}
+                      onChange={(e) =>
+                        setRecurringForm((prev) => ({ ...prev, startDate: e.target.value }))
+                      }
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="recurring-form-end-date" className="form-label">
+                      Date de fin (optionnelle)
+                    </label>
+                    <input
+                      type="date"
+                      id="recurring-form-end-date"
+                      name="endDate"
+                      className="form-input"
+                      value={recurringForm.endDate}
+                      onChange={(e) =>
+                        setRecurringForm((prev) => ({ ...prev, endDate: e.target.value }))
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div className="time-row">
+                  <div className="form-group">
+                    <label htmlFor="recurring-form-start-time" className="form-label">
+                      Heure de début
+                    </label>
+                    <input
+                      type="time"
+                      id="recurring-form-start-time"
+                      name="startTime"
+                      className="form-input"
+                      value={recurringForm.startTime}
+                      onChange={(e) =>
+                        setRecurringForm((prev) => ({ ...prev, startTime: e.target.value }))
+                      }
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label htmlFor="recurring-form-end-time" className="form-label">
+                      Heure de fin
+                    </label>
+                    <input
+                      type="time"
+                      id="recurring-form-end-time"
+                      name="endTime"
+                      className="form-input"
+                      value={recurringForm.endTime}
+                      onChange={(e) =>
+                        setRecurringForm((prev) => ({ ...prev, endTime: e.target.value }))
+                      }
+                    />
+                  </div>
+                </div>
+
+                {/* Recurrence Live Preview */}
+                {recurrencePreview && (
+                  <div className="duration-preview-box" id="recurring-preview-box">
+                    {recurrencePreview.success ? (
+                      <div>
+                        <strong>🗓 Aperçu des occurrences :</strong> {recurrencePreview.occurrences.length} garde(s) prévues
+                        {recurrencePreview.occurrences.length > 0 && (
+                          <div style={{ marginTop: "0.25rem", fontSize: "0.85rem", opacity: 0.9 }}>
+                            Premières dates : {recurrencePreview.occurrences.slice(0, 5).join(", ")}
+                            {recurrencePreview.occurrences.length > 5 ? "..." : ""}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <span style={{ color: "#dc2626" }}>
+                        ⚠️ {recurrencePreview.error.message}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <div className="form-group" style={{ marginTop: "1rem" }}>
+                  <label htmlFor="recurring-form-notes" className="form-label">
+                    Notes (optionnel)
+                  </label>
+                  <textarea
+                    id="recurring-form-notes"
+                    name="notes"
+                    className="form-input"
+                    rows={2}
+                    placeholder="ex. Roulement de nuit service Réanimation..."
+                    value={recurringForm.notes}
+                    onChange={(e) =>
+                      setRecurringForm((prev) => ({ ...prev, notes: e.target.value }))
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="modal-footer" id="recurring-modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setRecurringModalOpen(false)}
+                  id="btn-cancel-recurring-modal"
+                >
+                  Annuler
+                </button>
+
+                <button
+                  type="submit"
+                  className="btn btn-primary btn-sm"
+                  id="btn-save-recurring"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? "Génération..." : "Enregistrer et générer les gardes"}
+                </button>
+              </div>
+            </Form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Dialog for Managing Active Recurring Rules */}
+      {manageRecurringModalOpen && (
+        <div
+          className="modal-backdrop"
+          id="manage-recurring-modal-backdrop"
+          onClick={() => setManageRecurringModalOpen(false)}
+        >
+          <div
+            className="modal-dialog"
+            id="manage-recurring-modal"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: "600px" }}
+          >
+            <div className="modal-header" id="manage-recurring-header">
+              <h2 className="modal-title" id="manage-recurring-title">
+                📋 Mes Roulements Récurrents Configurés
+              </h2>
+              <button
+                type="button"
+                className="btn-close-modal"
+                onClick={() => setManageRecurringModalOpen(false)}
+                id="btn-close-manage-recurring"
+                aria-label="Fermer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="modal-body" id="manage-recurring-body">
+              <p className="subtitle" style={{ marginBottom: "1rem" }}>
+                Voici vos règles de récurrence enregistrées. Supprimer une règle interrompt les générations futures mais conserve vos gardes déjà inscrites au planning.
+              </p>
+
+              {recurringShiftsList.length === 0 ? (
+                <p className="info-muted">Aucun roulement récurrent n'est configuré.</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                  {recurringShiftsList.map((rule) => {
+                    const st = shiftTypesList.find((s) => s.id === rule.shiftTypeId);
+                    return (
+                      <div
+                        key={rule.id}
+                        className="card"
+                        style={{
+                          padding: "0.75rem 1rem",
+                          backgroundColor: "#f8fafc",
+                          border: "1px solid #e2e8f0",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div>
+                            <strong>{rule.name || st?.name || "Roulement"}</strong>{" "}
+                            <span style={{ fontSize: "0.85rem", opacity: 0.8 }}>
+                              ({rule.frequency === "weekly" ? `Toutes les ${rule.interval} sem` : `Tous les ${rule.interval} jours`})
+                            </span>
+                          </div>
+
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="delete_recurring_shift" />
+                            <input type="hidden" name="recurringShiftId" value={rule.id} />
+                            <button
+                              type="submit"
+                              className="btn btn-danger btn-sm"
+                              disabled={isSubmitting}
+                              title="Supprimer ce roulement"
+                            >
+                              Supprimer
+                            </button>
+                          </Form>
+                        </div>
+
+                        <div style={{ fontSize: "0.85rem", color: "#64748b", marginTop: "0.25rem" }}>
+                          Période : du {rule.startDate} {rule.endDate ? `au ${rule.endDate}` : "(sans fin)"}
+                          {rule.startTime && ` • Horaires : ${rule.startTime} - ${rule.endTime}`}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div
+                style={{
+                  marginTop: "1.25rem",
+                  padding: "0.75rem",
+                  backgroundColor: "#eff6ff",
+                  border: "1px solid #bfdbfe",
+                  borderRadius: "0.375rem",
+                  fontSize: "0.85rem",
+                  color: "#1e40af",
+                }}
+              >
+                💡 <strong>Remarque :</strong> La suppression d'un roulement n'efface pas les gardes déjà créées dans le planning.
+              </div>
+            </div>
+
+            <div className="modal-footer" id="manage-recurring-footer">
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setManageRecurringModalOpen(false)}
+                id="btn-close-manage"
+              >
+                Fermer
+              </button>
+            </div>
           </div>
         </div>
       )}

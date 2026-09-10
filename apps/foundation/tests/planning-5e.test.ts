@@ -112,14 +112,18 @@ describe("Milestone 5E: Shift Management & Calendar Workflows", () => {
       const withDbSpy = vi
         .spyOn(dbClientModule, "withDb")
         .mockImplementation(async (_input, callback) => {
+          const createWhereRes = (arr: any[] = []) => {
+            const p = Promise.resolve(arr);
+            (p as any).orderBy = vi.fn().mockResolvedValue(arr);
+            return p;
+          };
+
           const mockDb = {
             select: vi.fn().mockImplementation(() => ({
               from: vi.fn().mockImplementation(() => ({
-                where: vi.fn().mockResolvedValue([]), // for seed check
+                where: vi.fn().mockImplementation(() => createWhereRes([])),
                 leftJoin: vi.fn().mockImplementation(() => ({
-                  where: vi.fn().mockImplementation(() => ({
-                    orderBy: vi.fn().mockResolvedValue(mockDbShifts),
-                  })),
+                  where: vi.fn().mockImplementation(() => createWhereRes(mockDbShifts)),
                 })),
               })),
             })),
