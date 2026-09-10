@@ -508,3 +508,334 @@ code.info-value {
     width: 100%;
   }
 }
+
+/* Calendar & Shift Management Styles */
+.calendar-header-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.calendar-month-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.calendar-nav-group {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.calendar-grid-container {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  background-color: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+  text-align: center;
+}
+
+.calendar-weekday {
+  padding: 0.5rem 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+}
+
+.calendar-days-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-auto-rows: minmax(85px, auto);
+}
+
+.calendar-day-cell {
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  padding: 0.35rem;
+  min-height: 85px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  background-color: #ffffff;
+  transition: background-color 0.15s ease;
+  cursor: pointer;
+  position: relative;
+}
+
+.calendar-day-cell:nth-child(7n) {
+  border-right: none;
+}
+
+.calendar-day-cell:hover {
+  background-color: #f1f5f9;
+}
+
+.calendar-day-cell.outside-month {
+  background-color: #f8fafc;
+  color: #cbd5e1;
+  opacity: 0.6;
+}
+
+.calendar-day-cell.is-today {
+  background-color: #f0f9ff;
+}
+
+.calendar-day-cell.is-today .calendar-date-num {
+  background-color: var(--color-primary);
+  color: #ffffff;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.calendar-day-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.calendar-date-num {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.btn-add-day-shift {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  padding: 0 0.25rem;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.calendar-day-cell:hover .btn-add-day-shift {
+  opacity: 1;
+}
+
+.shift-badge {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 5px;
+  font-size: 0.725rem;
+  line-height: 1.25;
+  color: #ffffff;
+  text-decoration: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  transition: transform 0.1s ease, filter 0.15s ease;
+}
+
+.shift-badge:hover {
+  transform: translateY(-1px);
+  filter: brightness(0.95);
+}
+
+.shift-badge-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+}
+
+.shift-badge-time {
+  font-size: 0.675rem;
+  opacity: 0.92;
+  font-weight: 500;
+}
+
+.shift-badge-duration {
+  font-size: 0.65rem;
+  background-color: rgba(255, 255, 255, 0.25);
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  margin-top: 0.1rem;
+  display: inline-block;
+  width: fit-content;
+}
+
+/* Empty State Card */
+.empty-planning-card {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  background: #ffffff;
+  border: 1px dashed var(--color-border);
+  border-radius: 12px;
+  margin-top: 1rem;
+}
+
+.empty-planning-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+.empty-planning-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.empty-planning-desc {
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+  max-width: 420px;
+  margin: 0 auto 1.5rem auto;
+}
+
+/* Modal Dialog */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(2px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.modal-dialog {
+  background-color: #ffffff;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 480px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+  animation: modalSlideIn 0.2s ease-out;
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.modal-header {
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.btn-close-modal {
+  background: transparent;
+  border: none;
+  font-size: 1.25rem;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.btn-close-modal:hover {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+
+.modal-body {
+  padding: 1.5rem;
+}
+
+.modal-footer {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--color-border);
+  background-color: var(--color-bg);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.btn-danger {
+  background-color: #dc2626;
+  color: #ffffff;
+}
+
+.btn-danger:hover {
+  background-color: #b91c1c;
+}
+
+.time-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.duration-preview-box {
+  background-color: #f0f9ff;
+  border: 1px solid #bae6fd;
+  color: #0369a1;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+@media (max-width: 640px) {
+  .calendar-days-grid {
+    grid-auto-rows: minmax(70px, auto);
+  }
+  .calendar-day-cell {
+    min-height: 70px;
+    padding: 0.2rem;
+  }
+  .shift-badge {
+    padding: 0.2rem 0.25rem;
+    font-size: 0.65rem;
+  }
+  .calendar-weekday {
+    font-size: 0.65rem;
+    padding: 0.35rem 0.1rem;
+  }
+  .calendar-header-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .calendar-nav-group {
+    justify-content: space-between;
+  }
+}
+
