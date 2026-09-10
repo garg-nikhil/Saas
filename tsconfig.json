@@ -24,9 +24,8 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "references": [
-    {
-      "path": "./apps/foundation"
-    }
+  "include": [
+    "apps/foundation/**/*",
+    "drizzle.config.ts"
   ]
 }
