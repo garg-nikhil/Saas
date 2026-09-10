@@ -3,12 +3,12 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import { defineConfig } from "vite";
 import path from "path";
 
+const cloudflarePlugin = cloudflare as unknown as (options?: Record<string, unknown>) => any;
+
 export default defineConfig({
   plugins: [
-    cloudflare({ viteEnvironment: { name: "ssr" } }),
-    reactRouter({
-      appDirectory: path.resolve(import.meta.dirname, "./app"),
-    }),
+    cloudflarePlugin({ viteEnvironment: { name: "ssr" } }),
+    reactRouter(),
   ],
   resolve: {
     alias: {

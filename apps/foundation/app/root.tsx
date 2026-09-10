@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import {
   isRouteErrorResponse,
   Links,
@@ -9,6 +10,16 @@ import {
 import "./app.css";
 
 export function Layout({ children }: { children: React.ReactNode }) {
+  useEffect(() => {
+    if (typeof document !== "undefined" && document.documentElement) {
+      for (const a of Array.from(document.documentElement.attributes)) {
+        if (a.name.startsWith("__") || a.name.includes("token")) {
+          document.documentElement.removeAttribute(a.name);
+        }
+      }
+    }
+  }, []);
+
   return (
     <html lang="fr" suppressHydrationWarning>
       <head>
@@ -16,11 +27,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `if(typeof document!=="undefined"&&document.documentElement){for(const a of Array.from(document.documentElement.attributes)){if(a.name.startsWith("__")||a.name.includes("token"))document.documentElement.removeAttribute(a.name);}}`,
-          }}
-        />
       </head>
       <body suppressHydrationWarning>
         {children}

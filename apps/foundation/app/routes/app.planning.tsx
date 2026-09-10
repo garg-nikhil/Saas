@@ -827,16 +827,41 @@ export default function Planning() {
         })
       : null;
 
+  // Dynamic client-side validation for recurring modal
+  let recurringValidationError: string | null = null;
+
+  if (recurringForm.frequency === "weekly" && recurringForm.daysOfWeek.length === 0) {
+    recurringValidationError = "Veuillez cocher au moins un jour de la semaine (ex. Lun, Mer, Ven).";
+  } else if (recurringForm.startDate && recurringForm.endDate && recurringForm.endDate < recurringForm.startDate) {
+    recurringValidationError = "La date de fin doit être égale ou postérieure à la date de début.";
+  }
+
+  // Calculate live shift duration per occurrence
+  const singleShiftDuration =
+    recurringForm.startTime && recurringForm.endTime
+      ? calculateShiftDuration({
+          startTime: recurringForm.startTime,
+          endTime: recurringForm.endTime,
+        })
+      : null;
+
+  const singleShiftHours =
+    singleShiftDuration && singleShiftDuration.success
+      ? Math.round((singleShiftDuration.durationMinutes / 60) * 10) / 10
+      : null;
+
   // Recurrence occurrence dates preview calculation
   let previewRangeTo = recurringForm.endDate;
+  let isDefaultPreviewRange = false;
   if (!previewRangeTo && recurringForm.startDate) {
     const sObj = new Date(recurringForm.startDate);
     sObj.setDate(sObj.getDate() + 90);
     previewRangeTo = sObj.toISOString().split("T")[0];
+    isDefaultPreviewRange = true;
   }
 
   const recurrencePreview =
-    recurringForm.startDate && previewRangeTo
+    !recurringValidationError && recurringForm.startDate && previewRangeTo
       ? generateOccurrenceDates(
           {
             startDate: recurringForm.startDate,
@@ -851,6 +876,13 @@ export default function Planning() {
           },
         )
       : null;
+
+  if (recurrencePreview && !recurrencePreview.success) {
+    recurringValidationError = recurrencePreview.error.message;
+  }
+
+  const liveOccurrences = recurrencePreview && recurrencePreview.success ? recurrencePreview.occurrences : [];
+  const totalEstimatedHours = singleShiftHours && liveOccurrences.length > 0 ? Math.round(liveOccurrences.length * singleShiftHours) : null;
 
   return (
     <div className="card" id="planning-card">
@@ -1484,7 +1516,7 @@ export default function Planning() {
                   </div>
                 </div>
 
-                <div className="time-row" style={{ marginBottom: "1rem" }}>
+                <div className="time-row" style={{ marginBottom: "1.25rem" }}>
                   <div className="form-group">
                     <label htmlFor="recurring-form-start-time" className="form-label">
                       Heure de début
@@ -1518,28 +1550,52 @@ export default function Planning() {
                   </div>
                 </div>
 
-                {/* Recurrence Live Preview */}
-                {recurrencePreview && (
-                  <div className="duration-preview-box" id="recurring-preview-box" style={{ marginBottom: "1rem" }}>
-                    {recurrencePreview.success ? (
-                      <div>
-                        <strong>🗓 Aperçu des occurrences :</strong> {recurrencePreview.occurrences.length} garde(s) prévues
-                        {recurrencePreview.occurrences.length > 0 && (
-                          <div style={{ marginTop: "0.25rem", fontSize: "0.85rem", opacity: 0.9 }}>
-                            Premières dates : {recurrencePreview.occurrences.slice(0, 5).join(", ")}
-                            {recurrencePreview.occurrences.length > 5 ? "..." : ""}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <span style={{ color: "#dc2626" }}>
-                        ⚠️ {recurrencePreview.error.message}
+                {/* Dynamic Client-Side Live Validation & Instant Counter Card */}
+                <div
+                  id="recurring-live-validation"
+                  className={`live-validation-card ${recurringValidationError ? "is-invalid" : "is-valid"}`}
+                >
+                  <div className="live-validation-header">
+                    <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      {recurringValidationError ? "⚠️ Validation incomplète" : "✅ Validation dynamique"}
+                    </span>
+                    {!recurringValidationError && (
+                      <span className="live-validation-counter-badge">
+                        {liveOccurrences.length} {liveOccurrences.length > 1 ? "gardes" : "garde"}
                       </span>
                     )}
                   </div>
-                )}
 
-                <div className="form-group">
+                  {recurringValidationError ? (
+                    <div className="live-validation-details">{recurringValidationError}</div>
+                  ) : (
+                    <div className="live-validation-details">
+                      <div>
+                        <strong>
+                          {liveOccurrences.length} garde(s) récurrente(s) seront générée(s)
+                        </strong>{" "}
+                        du {recurringForm.startDate.split("-").reverse().join("/")}
+                        {recurringForm.endDate
+                          ? ` au ${recurringForm.endDate.split("-").reverse().join("/")}`
+                          : " (aperçu initial sur 3 mois)"}.
+                        {totalEstimatedHours !== null && ` Volume estimé : ~${totalEstimatedHours}h de garde.`}
+                      </div>
+                      {isDefaultPreviewRange && (
+                        <div style={{ fontSize: "0.775rem", opacity: 0.85, marginTop: "0.25rem" }}>
+                          💡 Sans date de fin fixée, l'aperçu affiche les 3 prochains mois. La récurrence continue jusqu'à 3 ans max.
+                        </div>
+                      )}
+                      {liveOccurrences.length > 0 && (
+                        <div style={{ marginTop: "0.35rem", fontSize: "0.775rem", opacity: 0.9 }}>
+                          📅 Premières dates : {liveOccurrences.slice(0, 6).join(", ")}
+                          {liveOccurrences.length > 6 ? "..." : ""}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="form-group" style={{ marginBottom: "1rem" }}>
                   <label htmlFor="recurring-form-notes" className="form-label">
                     Notes ou Service (optionnel)
                   </label>
@@ -1554,6 +1610,27 @@ export default function Planning() {
                       setRecurringForm((prev) => ({ ...prev, notes: e.target.value }))
                     }
                   />
+                </div>
+
+                {/* Section Aide-mémoire */}
+                <div className="aide-memoire-box" id="recurring-aide-memoire">
+                  <div className="aide-memoire-title">
+                    <span>💡 Aide-mémoire — Génération des gardes</span>
+                  </div>
+                  <ul className="aide-memoire-list">
+                    <li>
+                      <strong>Plafond de génération (3 ans) :</strong> La récurrence automatique est limitée à <strong>3 ans maximum (1095 jours)</strong> à partir de la date de début pour préserver les performances de votre planning.
+                    </li>
+                    <li>
+                      <strong>Prévention des doublons :</strong> Si une garde existe déjà exactement au même jour et heure, aucun doublon n'est créé.
+                    </li>
+                    <li>
+                      <strong>Type de roulement :</strong> Le mode <em>Hebdomadaire</em> génère la garde uniquement sur les jours cochés (ex. Lun/Mer/Ven). Le mode <em>Quotidien</em> répète la garde tous les N jours.
+                    </li>
+                    <li>
+                      <strong>Gestion individuelle :</strong> Chaque garde générée devient une entité propre dans votre calendrier. Vous pouvez modifier, échanger ou supprimer une date spécifique sans altérer le reste de la série.
+                    </li>
+                  </ul>
                 </div>
               </div>
 
@@ -1571,9 +1648,11 @@ export default function Planning() {
                   type="submit"
                   className="btn btn-primary"
                   id="btn-save-recurring"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || !!recurringValidationError}
                 >
-                  {isSubmitting ? "Génération..." : "Enregistrer et générer les gardes"}
+                  {isSubmitting
+                    ? "Génération en cours..."
+                    : `Générer ${liveOccurrences.length > 0 ? `(${liveOccurrences.length})` : ""} la récurrence`}
                 </button>
               </div>
             </Form>
