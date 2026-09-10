@@ -1,0 +1,15 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+allowBuilds:
+  esbuild: true
+  workerd: true
+minimumReleaseAgeExclude:
+  - '@cloudflare/vite-plugin@1.54.6'
+  - miniflare@5.20260908.0-alpha
+  - wrangler@4.130.0
+  - '@posthog/core@1.51.1'
+  - '@sentry/cloudflare@10.74.0'
+  - '@sentry/core@10.74.0'
+  - '@sentry/server-utils@10.74.0'
+  - posthog-node@5.51.8

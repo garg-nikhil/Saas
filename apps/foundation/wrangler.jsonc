@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "foundation",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "main": "./workers/app.ts",
+  "assets": {
+    "directory": "./build/client"
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "placeholder-hyperdrive-id",
+      "localConnectionString": "postgresql://postgres:postgres@127.0.0.1:5432/postgres"
+    }
+  ],
+  "vars": {
+    "ENVIRONMENT": "production",
+    "SUPABASE_URL": "https://placeholder-project.supabase.co",
+    "SUPABASE_ANON_KEY": "placeholder-anon-key"
+  }
+}

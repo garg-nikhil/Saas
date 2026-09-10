@@ -1,0 +1,8 @@
+{
+  "name": "SaaS Factory",
+  "description": "Reusable SaaS Product Factory - Complete Foundation with Authentication, Commercial Services (Entitlements, Stripe Billing, Resend Email), and Platform Services (Sentry Observability, PostHog Analytics, Supabase Storage, PDF Engine, Notifications, and GDPR Lifecycle).",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
