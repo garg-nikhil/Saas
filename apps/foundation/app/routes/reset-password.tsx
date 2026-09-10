@@ -5,8 +5,8 @@ import { createAuthService } from "../auth";
 
 export function meta() {
   return [
-    { title: "Nouveau mot de passe - SaaS Factory" },
-    { name: "description", content: "Définir un nouveau mot de passe" },
+    { title: "Nouveau mot de passe — Planning Infirmier" },
+    { name: "description", content: "Définir un nouveau mot de passe pour votre compte Planning Infirmier" },
   ];
 }
 

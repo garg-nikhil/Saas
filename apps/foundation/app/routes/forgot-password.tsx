@@ -5,8 +5,8 @@ import { createAuthService } from "../auth";
 
 export function meta() {
   return [
-    { title: "Mot de passe oublié - SaaS Factory" },
-    { name: "description", content: "Réinitialisation de mot de passe SaaS Factory" },
+    { title: "Mot de passe oublié — Planning Infirmier" },
+    { name: "description", content: "Réinitialisation de mot de passe Planning Infirmier" },
   ];
 }
 

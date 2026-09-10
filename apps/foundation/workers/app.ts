@@ -34,8 +34,39 @@ const requestHandler = createRequestHandler(
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    let req = request;
+    const origin = request.headers.get("origin");
+
+    if (origin && origin !== "null") {
+      try {
+        const originUrl = new URL(origin);
+        const reqUrl = new URL(request.url);
+        if (reqUrl.origin !== originUrl.origin) {
+          const normalizedUrl = `${originUrl.origin}${reqUrl.pathname}${reqUrl.search}${reqUrl.hash}`;
+          req = new Request(normalizedUrl, request);
+        }
+      } catch {
+        // Ignore invalid origin URL parse
+      }
+    } else {
+      const forwardedHost = request.headers.get("x-forwarded-host") || request.headers.get("host");
+      const forwardedProto = request.headers.get("x-forwarded-proto") || "http";
+      if (forwardedHost) {
+        try {
+          const reqUrl = new URL(request.url);
+          const expectedOrigin = `${forwardedProto}://${forwardedHost}`;
+          if (reqUrl.origin !== expectedOrigin) {
+            const normalizedUrl = `${expectedOrigin}${reqUrl.pathname}${reqUrl.search}${reqUrl.hash}`;
+            req = new Request(normalizedUrl, request);
+          }
+        } catch {
+          // Ignore invalid host parse
+        }
+      }
+    }
+
     const context = new RouterContextProvider();
     context.set(cloudflareContext, { env, ctx });
-    return requestHandler(request, context);
+    return requestHandler(req, context);
   },
 } satisfies ExportedHandler<Env>;

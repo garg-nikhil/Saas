@@ -7,10 +7,10 @@ describe("Milestone 4B — PDF Generation Service", () => {
 
     const docData: PdfDocumentData = {
       title: "Quarterly Financial Statement",
-      author: "SaaS Factory Financials",
+      author: "Planning Infirmier Financials",
       subject: "Q3 Summary",
       headerText: "CONFIDENTIAL — FOR INTERNAL USE ONLY",
-      footerText: "SaaS Factory Platform",
+      footerText: "Planning Infirmier Platform",
       pages: [
         {
           title: "Executive Summary",

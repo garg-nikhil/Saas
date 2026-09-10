@@ -10,8 +10,8 @@ import {
 
 export function meta() {
   return [
-    { title: "Connexion - SaaS Factory" },
-    { name: "description", content: "Connexion sécurisée à votre compte SaaS Factory" },
+    { title: "Connexion — Planning Infirmier" },
+    { name: "description", content: "Connexion sécurisée à votre compte Planning Infirmier" },
   ];
 }
 

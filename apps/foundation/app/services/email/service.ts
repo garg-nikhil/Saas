@@ -43,7 +43,7 @@ export function createEmailService(
   const defaultFrom =
     env.EMAIL_FROM ||
     process.env.EMAIL_FROM ||
-    "SaaS Factory <notifications@factory.local>";
+    "Planning Infirmier <notifications@planning-infirmier.fr>";
 
   const adapter = new ResendEmailAdapter(apiKey, defaultFrom);
   return new EmailService(adapter, defaultFrom);

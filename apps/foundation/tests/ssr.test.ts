@@ -48,8 +48,8 @@ describe("HTTP-level SSR Verification", () => {
     expect(body).toContain("<body");
 
     // Verify actual server-rendered application content
-    expect(body).toContain("SaaS Factory");
-    expect(body).toContain("Build localized SaaS products faster.");
+    expect(body).toContain("Planning Infirmier");
+    expect(body).toContain("La solution sur mesure pour gérer vos gardes");
     expect(body).toContain('id="home-view"');
     expect(body).toContain('id="home-card"');
     expect(body).toContain('id="home-title"');

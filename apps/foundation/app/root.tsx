@@ -10,7 +10,7 @@ import "./app.css";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="fr" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -36,10 +36,10 @@ export default function App() {
 }
 
 export function ErrorBoundary({ error }: { error: unknown }) {
-  let message = "Oops!";
-  let details = "An unexpected error occurred.";
+  let message = "Une erreur est survenue";
+  let details = "Une erreur inattendue est survenue lors du chargement de la page.";
   if (isRouteErrorResponse(error)) {
-    message = error.status === 404 ? "404 - Not Found" : `Error ${error.status}`;
+    message = error.status === 404 ? "404 - Page non trouvée" : `Erreur ${error.status}`;
     details = error.statusText || details;
   } else if (error instanceof Error) {
     details = error.message;
@@ -51,7 +51,7 @@ export function ErrorBoundary({ error }: { error: unknown }) {
         <h1>{message}</h1>
         <p className="subtitle">{details}</p>
         <a href="/" className="btn btn-secondary">
-          Return Home
+          Retour à l'accueil
         </a>
       </div>
     </main>

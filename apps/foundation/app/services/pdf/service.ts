@@ -18,7 +18,7 @@ export class PdfService implements IPdfService {
     if (documentData.author) pdfDoc.setAuthor(documentData.author);
     if (documentData.subject) pdfDoc.setSubject(documentData.subject);
     if (documentData.keywords) pdfDoc.setKeywords(documentData.keywords);
-    pdfDoc.setProducer("SaaS Factory PDF Engine");
+    pdfDoc.setProducer("Planning Infirmier PDF Engine");
     pdfDoc.setCreationDate(new Date());
 
     const regularFont = await pdfDoc.embedFont(StandardFonts.Helvetica);

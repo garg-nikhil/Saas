@@ -9,8 +9,8 @@ import {
 
 export function meta() {
   return [
-    { title: "Créer un compte - SaaS Factory" },
-    { name: "description", content: "Inscription sécurisée à SaaS Factory" },
+    { title: "Créer un compte — Planning Infirmier" },
+    { name: "description", content: "Inscription sécurisée à Planning Infirmier" },
   ];
 }
 
@@ -105,7 +105,7 @@ export default function Signup() {
       <div className="card" id="signup-card">
         <h1 id="signup-title">Créer un compte</h1>
         <p className="subtitle" id="signup-subtitle">
-          Rejoignez la plateforme SaaS Factory
+          Rejoignez la plateforme Planning Infirmier
         </p>
 
         {actionData?.error && (

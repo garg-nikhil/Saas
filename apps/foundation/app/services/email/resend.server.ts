@@ -19,7 +19,7 @@ export class ResendEmailAdapter implements IEmailAdapter {
 
   constructor(
     private readonly apiKey?: string,
-    private readonly defaultFrom: string = "SaaS Factory <notifications@factory.local>",
+    private readonly defaultFrom: string = "Planning Infirmier <notifications@planning-infirmier.fr>",
     customClient?: Resend,
   ) {
     if (customClient) {
