@@ -5,6 +5,8 @@ import { loader as onboardingLoader, action as onboardingAction } from "../app/r
 import { DEFAULT_SHIFT_TYPES } from "../app/db/schema/planning/shift-types";
 import { SUPPORTED_PROFESSIONS, normalizeProfession } from "../app/db/schema/planning/nurse-profiles";
 import { createAnalyticsService } from "../app/services/analytics";
+import * as createAnalyticsServiceModule from "../app/services/analytics";
+import * as dbClientModule from "../app/db/client";
 import type { Env } from "../app/context";
 import * as authModule from "../app/auth";
 
@@ -253,51 +255,100 @@ describe("Milestone 5D: Planning Infirmier Authenticated Application Foundation 
       });
     });
 
-    it("prevents duplicate onboarding_started events on concurrent or repeated loader execution using atomic DB returning insertion", async () => {
-      const trackedEvents: string[] = [];
+    it("emits onboarding_started only when the atomic nurse profile insert returns a newly inserted row", async () => {
       const mockAdapter = {
-        track: vi.fn().mockImplementation(async (evt) => {
-          trackedEvents.push(evt.event);
-        }),
+        track: vi.fn().mockResolvedValue(undefined),
         identify: vi.fn().mockResolvedValue(undefined),
         page: vi.fn().mockResolvedValue(undefined),
         flush: vi.fn().mockResolvedValue(undefined),
         shutdown: vi.fn().mockResolvedValue(undefined),
       };
 
-      const analytics = createAnalyticsService(undefined, mockAdapter);
+      const analyticsSpy = vi
+        .spyOn(createAnalyticsServiceModule, "createAnalyticsService")
+        .mockReturnValue(createAnalyticsService(undefined, mockAdapter));
 
-      // Simulate atomic insert behavior: first call succeeds (inserted.length > 0), subsequent call collides (inserted.length === 0)
-      const existingProfileIds = new Set<string>();
+      const withDbSpy = vi
+        .spyOn(dbClientModule, "withDb")
+        .mockImplementation(async (_input, callback) => {
+          const mockDb = {
+            insert: vi.fn().mockImplementation(() => ({
+              values: vi.fn().mockImplementation(() => ({
+                onConflictDoNothing: vi.fn().mockImplementation(() => ({
+                  returning: vi.fn().mockResolvedValue([{ id: "nurse-profile-1" }]),
+                })),
+              })),
+            })),
+          };
+          return callback(mockDb as any);
+        });
 
-      const simulateAtomicLoaderExecution = async (profileId: string) => {
-        let isNewlyInserted = false;
-        if (!existingProfileIds.has(profileId)) {
-          existingProfileIds.add(profileId);
-          isNewlyInserted = true;
-        }
+      const request = new Request("https://factory.local/app/onboarding");
+      const mockHyperdrive = { connectionString: "postgresql://localhost/test" };
 
-        if (isNewlyInserted) {
-          await analytics.track({
-            distinctId: profileId,
-            event: "onboarding_started",
-            properties: { timestamp: new Date().toISOString() },
-          });
-        }
+      await onboardingLoader({
+        request,
+        params: {},
+        context: {
+          env: { HYPERDRIVE: mockHyperdrive },
+        },
+      } as any);
+
+      expect(mockAdapter.track).toHaveBeenCalledTimes(1);
+      expect(mockAdapter.track).toHaveBeenCalledWith(
+        expect.objectContaining({
+          distinctId: "test-user-123",
+          event: "onboarding_started",
+        }),
+      );
+
+      withDbSpy.mockRestore();
+      analyticsSpy.mockRestore();
+    });
+
+    it("does not emit onboarding_started when atomic nurse profile insert returns an empty array due to conflict", async () => {
+      const mockAdapter = {
+        track: vi.fn().mockResolvedValue(undefined),
+        identify: vi.fn().mockResolvedValue(undefined),
+        page: vi.fn().mockResolvedValue(undefined),
+        flush: vi.fn().mockResolvedValue(undefined),
+        shutdown: vi.fn().mockResolvedValue(undefined),
       };
 
-      // Run 5 concurrent loader executions for the same profile ID
-      await Promise.all([
-        simulateAtomicLoaderExecution("profile-nurse-456"),
-        simulateAtomicLoaderExecution("profile-nurse-456"),
-        simulateAtomicLoaderExecution("profile-nurse-456"),
-        simulateAtomicLoaderExecution("profile-nurse-456"),
-        simulateAtomicLoaderExecution("profile-nurse-456"),
-      ]);
+      const analyticsSpy = vi
+        .spyOn(createAnalyticsServiceModule, "createAnalyticsService")
+        .mockReturnValue(createAnalyticsService(undefined, mockAdapter));
 
-      // Exactly one onboarding_started event must be produced
-      expect(trackedEvents).toEqual(["onboarding_started"]);
-      expect(mockAdapter.track).toHaveBeenCalledTimes(1);
+      const withDbSpy = vi
+        .spyOn(dbClientModule, "withDb")
+        .mockImplementation(async (_input, callback) => {
+          const mockDb = {
+            insert: vi.fn().mockImplementation(() => ({
+              values: vi.fn().mockImplementation(() => ({
+                onConflictDoNothing: vi.fn().mockImplementation(() => ({
+                  returning: vi.fn().mockResolvedValue([]),
+                })),
+              })),
+            })),
+          };
+          return callback(mockDb as any);
+        });
+
+      const request = new Request("https://factory.local/app/onboarding");
+      const mockHyperdrive = { connectionString: "postgresql://localhost/test" };
+
+      await onboardingLoader({
+        request,
+        params: {},
+        context: {
+          env: { HYPERDRIVE: mockHyperdrive },
+        },
+      } as any);
+
+      expect(mockAdapter.track).not.toHaveBeenCalled();
+
+      withDbSpy.mockRestore();
+      analyticsSpy.mockRestore();
     });
 
     it("verifies nurse_profiles.profession only accepts valid supported profession values or null", () => {

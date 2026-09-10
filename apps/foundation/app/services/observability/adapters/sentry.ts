@@ -83,7 +83,7 @@ export class SentryObservabilityAdapter implements IObservabilityAdapter {
         transport: (transportOptions) =>
           createTransport(transportOptions, (request) => {
             const requestOptions = {
-              body: request.body,
+              body: request.body as BodyInit,
               method: "POST",
               headers: transportOptions.headers,
               ...transportOptions.fetchOptions,
