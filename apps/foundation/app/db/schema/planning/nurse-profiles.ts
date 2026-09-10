@@ -40,7 +40,8 @@ export const nurseProfiles = pgTable(
       .notNull()
       .unique()
       .references(() => profiles.id, { onDelete: "cascade" }),
-    profession: text("profession").notNull(),
+    profession: text("profession"),
+    onboardingStartedAt: timestamp("onboarding_started_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).defaultNow().notNull(),
   },

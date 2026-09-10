@@ -1,0 +1,2 @@
+ALTER TABLE "nurse_profiles" ALTER COLUMN "profession" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "nurse_profiles" ADD COLUMN "onboarding_started_at" timestamp with time zone DEFAULT now() NOT NULL;

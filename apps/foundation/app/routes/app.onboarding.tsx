@@ -28,14 +28,16 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     const profile = await syncUserProfile(env.HYPERDRIVE, user);
     if (profile) {
       await withDb(env.HYPERDRIVE, async (db) => {
-        const existingNurseProfiles = await db
-          .select()
-          .from(nurseProfiles)
-          .where(eq(nurseProfiles.profileId, profile.id))
-          .limit(1);
+        // Atomic insert: ON CONFLICT DO NOTHING returns the inserted row ONLY IF it was newly created.
+        const inserted = await db
+          .insert(nurseProfiles)
+          .values({
+            profileId: profile.id,
+          })
+          .onConflictDoNothing()
+          .returning({ id: nurseProfiles.id });
 
-        // Track onboarding_started ONLY once when entering the onboarding journey for the first time
-        if (existingNurseProfiles.length === 0) {
+        if (inserted.length > 0) {
           try {
             const analytics = createAnalyticsService(env);
             await analytics.track({
@@ -48,15 +50,6 @@ export async function loader({ request, context }: Route.LoaderArgs) {
           } catch {
             // Analytics failures must never block request execution
           }
-
-          // Mark onboarding as started in DB to prevent duplicate started events on loader revalidations
-          await db
-            .insert(nurseProfiles)
-            .values({
-              profileId: profile.id,
-              profession: "PENDING",
-            })
-            .onConflictDoNothing();
         }
       });
     }
