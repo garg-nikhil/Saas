@@ -1273,62 +1273,109 @@ export default function Planning() {
             <Form method="post" id="recurring-shift-form">
               <div className="modal-body" id="recurring-modal-body">
                 <input type="hidden" name="intent" value="create_recurring_shift" />
+                <input type="hidden" name="shiftTypeId" value={recurringForm.shiftTypeId} />
+                <input type="hidden" name="frequency" value={recurringForm.frequency} />
                 {recurringForm.daysOfWeek.map((d) => (
                   <input key={d} type="hidden" name="daysOfWeek" value={d} />
                 ))}
 
-                <div className="form-group">
-                  <label htmlFor="recurring-form-type" className="form-label">
-                    Type de garde / Roulement *
-                  </label>
-                  <select
-                    id="recurring-form-type"
-                    name="shiftTypeId"
-                    className="form-input"
-                    required
-                    value={recurringForm.shiftTypeId}
-                    onChange={(e) => handleRecurringShiftTypeChange(e.target.value)}
-                  >
-                    {shiftTypesList.map((st) => (
-                      <option key={st.id} value={st.id}>
-                        {st.name} {st.shortCode ? `(${st.shortCode})` : ""}{" "}
-                        {st.startTime ? `[${st.startTime} - ${st.endTime}]` : "[Sans horaire]"}
-                      </option>
-                    ))}
-                  </select>
+                {/* Section 1: Type de garde */}
+                <div className="form-group" style={{ marginBottom: "1.25rem" }}>
+                  <div className="section-divider-title">
+                    <span>📌 1. Type de garde / Roulement</span>
+                  </div>
+
+                  {/* Large touch cards for quick selection on mobile */}
+                  <div className="mobile-touch-card-grid" id="recurring-shift-type-cards">
+                    {shiftTypesList.map((st) => {
+                      const isSelected = recurringForm.shiftTypeId === st.id;
+                      return (
+                        <button
+                          key={st.id}
+                          type="button"
+                          className={`shift-touch-card ${isSelected ? "is-selected" : ""}`}
+                          onClick={() => handleRecurringShiftTypeChange(st.id)}
+                        >
+                          <div
+                            className="shift-color-dot"
+                            style={{ backgroundColor: st.color || "#0284c7" }}
+                          />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>{st.name}</div>
+                            <div style={{ fontSize: "0.75rem", color: "var(--color-text-muted)" }}>
+                              {st.startTime && st.endTime ? `${st.startTime} - ${st.endTime}` : "Sans horaire"}
+                            </div>
+                          </div>
+                          {isSelected && <span style={{ color: "var(--color-primary)", fontWeight: "bold" }}>✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                <div className="time-row">
-                  <div className="form-group">
-                    <label htmlFor="recurring-form-frequency" className="form-label">
-                      Fréquence *
-                    </label>
-                    <select
-                      id="recurring-form-frequency"
-                      name="frequency"
-                      className="form-input"
-                      value={recurringForm.frequency}
-                      onChange={(e) =>
+                {/* Section 2: Rythme & Fréquence */}
+                <div className="form-group" style={{ marginBottom: "1.25rem" }}>
+                  <div className="section-divider-title">
+                    <span>🔄 2. Rythme & Fréquence</span>
+                  </div>
+
+                  {/* Segmented Control for Frequency */}
+                  <div className="segmented-control" id="recurring-frequency-segmented">
+                    <button
+                      type="button"
+                      className={`segmented-btn ${recurringForm.frequency === "weekly" ? "is-active" : ""}`}
+                      onClick={() =>
                         setRecurringForm((prev) => ({
                           ...prev,
-                          frequency: e.target.value as "weekly" | "daily",
+                          frequency: "weekly",
                         }))
                       }
                     >
-                      <option value="weekly">Hebdomadaire (semaines)</option>
-                      <option value="daily">Quotidien (jours)</option>
-                    </select>
+                      <span>📅</span>
+                      <span>Hebdomadaire</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`segmented-btn ${recurringForm.frequency === "daily" ? "is-active" : ""}`}
+                      onClick={() =>
+                        setRecurringForm((prev) => ({
+                          ...prev,
+                          frequency: "daily",
+                        }))
+                      }
+                    >
+                      <span>📆</span>
+                      <span>Quotidien</span>
+                    </button>
                   </div>
+                </div>
 
-                  <div className="form-group">
-                    <label htmlFor="recurring-form-interval" className="form-label">
-                      Intervalle *
-                    </label>
+                {/* Interval Control with Large Stepper */}
+                <div className="form-group" style={{ marginBottom: "1.25rem" }}>
+                  <label htmlFor="recurring-form-interval" className="form-label">
+                    Intervalle de répétition *
+                  </label>
+                  <div className="stepper-control">
+                    <button
+                      type="button"
+                      className="stepper-btn"
+                      disabled={recurringForm.interval <= 1}
+                      onClick={() =>
+                        setRecurringForm((prev) => ({
+                          ...prev,
+                          interval: Math.max(1, prev.interval - 1),
+                        }))
+                      }
+                      aria-label="Diminuer l'intervalle"
+                    >
+                      −
+                    </button>
                     <input
                       type="number"
                       id="recurring-form-interval"
                       name="interval"
                       className="form-input"
+                      style={{ textAlign: "center", fontWeight: 700, fontSize: "1.1rem" }}
                       min={1}
                       max={52}
                       value={recurringForm.interval}
@@ -1339,13 +1386,37 @@ export default function Planning() {
                         }))
                       }
                     />
+                    <button
+                      type="button"
+                      className="stepper-btn"
+                      disabled={recurringForm.interval >= 52}
+                      onClick={() =>
+                        setRecurringForm((prev) => ({
+                          ...prev,
+                          interval: Math.min(52, prev.interval + 1),
+                        }))
+                      }
+                      aria-label="Augmenter l'intervalle"
+                    >
+                      +
+                    </button>
                   </div>
+                  <span style={{ fontSize: "0.8rem", color: "var(--color-text-muted)", marginTop: "0.25rem" }}>
+                    {recurringForm.frequency === "weekly"
+                      ? recurringForm.interval === 1
+                        ? "Chaque semaine"
+                        : `Toutes les ${recurringForm.interval} semaines`
+                      : recurringForm.interval === 1
+                      ? "Chaque jour"
+                      : `Tous les ${recurringForm.interval} jours`}
+                  </span>
                 </div>
 
+                {/* Day selector for weekly recurrence */}
                 {recurringForm.frequency === "weekly" && (
-                  <div className="form-group">
-                    <label className="form-label">Jours de la semaine de garde *</label>
-                    <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
+                  <div className="form-group" style={{ marginBottom: "1.25rem" }}>
+                    <label className="form-label">Jours de garde *</label>
+                    <div className="day-picker-grid" id="recurring-day-picker">
                       {[
                         { num: 1, label: "Lun" },
                         { num: 2, label: "Mar" },
@@ -1360,9 +1431,8 @@ export default function Planning() {
                           <button
                             key={day.num}
                             type="button"
-                            className={`btn btn-sm ${isChecked ? "btn-primary" : "btn-secondary"}`}
+                            className={`day-picker-btn ${isChecked ? "is-selected" : ""}`}
                             onClick={() => handleDayToggle(day.num)}
-                            style={{ minWidth: "42px" }}
                           >
                             {day.label}
                           </button>
@@ -1372,7 +1442,14 @@ export default function Planning() {
                   </div>
                 )}
 
-                <div className="time-row">
+                {/* Section 3: Période & Horaires */}
+                <div className="form-group" style={{ marginBottom: "1rem" }}>
+                  <div className="section-divider-title">
+                    <span>📅 3. Période & Horaires</span>
+                  </div>
+                </div>
+
+                <div className="time-row" style={{ marginBottom: "1rem" }}>
                   <div className="form-group">
                     <label htmlFor="recurring-form-start-date" className="form-label">
                       Date de début *
@@ -1407,7 +1484,7 @@ export default function Planning() {
                   </div>
                 </div>
 
-                <div className="time-row">
+                <div className="time-row" style={{ marginBottom: "1rem" }}>
                   <div className="form-group">
                     <label htmlFor="recurring-form-start-time" className="form-label">
                       Heure de début
@@ -1443,7 +1520,7 @@ export default function Planning() {
 
                 {/* Recurrence Live Preview */}
                 {recurrencePreview && (
-                  <div className="duration-preview-box" id="recurring-preview-box">
+                  <div className="duration-preview-box" id="recurring-preview-box" style={{ marginBottom: "1rem" }}>
                     {recurrencePreview.success ? (
                       <div>
                         <strong>🗓 Aperçu des occurrences :</strong> {recurrencePreview.occurrences.length} garde(s) prévues
@@ -1462,9 +1539,9 @@ export default function Planning() {
                   </div>
                 )}
 
-                <div className="form-group" style={{ marginTop: "1rem" }}>
+                <div className="form-group">
                   <label htmlFor="recurring-form-notes" className="form-label">
-                    Notes (optionnel)
+                    Notes ou Service (optionnel)
                   </label>
                   <textarea
                     id="recurring-form-notes"
@@ -1483,7 +1560,7 @@ export default function Planning() {
               <div className="modal-footer" id="recurring-modal-footer">
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className="btn btn-secondary"
                   onClick={() => setRecurringModalOpen(false)}
                   id="btn-cancel-recurring-modal"
                 >
@@ -1492,7 +1569,7 @@ export default function Planning() {
 
                 <button
                   type="submit"
-                  className="btn btn-primary btn-sm"
+                  className="btn btn-primary"
                   id="btn-save-recurring"
                   disabled={isSubmitting}
                 >

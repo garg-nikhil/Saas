@@ -35,33 +35,28 @@ const requestHandler = createRequestHandler(
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     let req = request;
-    const origin = request.headers.get("origin");
 
-    if (origin && origin !== "null") {
+    // Normalize request.url ONLY if trusted proxy forwarding headers are present.
+    // NEVER use the client-provided Origin header to rewrite request.url, as doing so
+    // would bypass React Router's CSRF protection (which validates Origin against request.url).
+    const forwardedHost = request.headers.get("x-forwarded-host");
+    const forwardedProto = request.headers.get("x-forwarded-proto") || "https";
+
+    if (forwardedHost) {
       try {
-        const originUrl = new URL(origin);
         const reqUrl = new URL(request.url);
-        if (reqUrl.origin !== originUrl.origin) {
-          const normalizedUrl = `${originUrl.origin}${reqUrl.pathname}${reqUrl.search}${reqUrl.hash}`;
-          req = new Request(normalizedUrl, request);
-        }
-      } catch {
-        // Ignore invalid origin URL parse
-      }
-    } else {
-      const forwardedHost = request.headers.get("x-forwarded-host") || request.headers.get("host");
-      const forwardedProto = request.headers.get("x-forwarded-proto") || "http";
-      if (forwardedHost) {
-        try {
-          const reqUrl = new URL(request.url);
-          const expectedOrigin = `${forwardedProto}://${forwardedHost}`;
+        const host = forwardedHost.split(",")[0].trim();
+        const proto = forwardedProto.split(",")[0].trim().replace(/:$/, "");
+
+        if (host) {
+          const expectedOrigin = `${proto}://${host}`;
           if (reqUrl.origin !== expectedOrigin) {
             const normalizedUrl = `${expectedOrigin}${reqUrl.pathname}${reqUrl.search}${reqUrl.hash}`;
             req = new Request(normalizedUrl, request);
           }
-        } catch {
-          // Ignore invalid host parse
         }
+      } catch {
+        // Ignore invalid URL/host parse
       }
     }
 
