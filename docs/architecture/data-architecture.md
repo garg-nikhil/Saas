@@ -14,6 +14,7 @@ Managed by the SaaS Factory infrastructure:
 
 ### Planning Infirmier Product Tables
 Product-specific business data layer:
+- `nurse_profiles`: User healthcare profession preference (IDE, IADE, IBODE, IPDE, AS, Cadre, Autre).
 - `shift_types`: User-owned or system-default shift categories (Matin, Après-midi, Nuit, 12h, Journée, Repos, Congé).
 - `shifts`: Individual planned work shifts linked to calendar dates and shift types.
 - `recurring_shifts`: Schedule recurrence rules (defining repeating patterns without auto-generating future shift rows).

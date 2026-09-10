@@ -5,6 +5,7 @@ import { getAppEnv } from "../context";
 import { requireAuth, syncUserProfile } from "../auth";
 import { withDb } from "../db/client";
 import { shiftTypes } from "../db/schema/planning/shift-types";
+import { nurseProfiles } from "../db/schema/planning/nurse-profiles";
 
 export async function loader({ request, context }: Route.LoaderArgs) {
   const env = getAppEnv(context);
@@ -15,15 +16,31 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   if (env.HYPERDRIVE) {
     const profile = await syncUserProfile(env.HYPERDRIVE, user);
     if (profile) {
-      const userShiftTypes = await withDb(env.HYPERDRIVE, async (db) => {
-        return db
+      const { userShiftTypes, nurseProfile } = await withDb(env.HYPERDRIVE, async (db) => {
+        const types = await db
           .select({ id: shiftTypes.id })
           .from(shiftTypes)
           .where(eq(shiftTypes.profileId, profile.id))
           .limit(1);
+
+        const np = await db
+          .select({ profession: nurseProfiles.profession })
+          .from(nurseProfiles)
+          .where(eq(nurseProfiles.profileId, profile.id))
+          .limit(1);
+
+        return {
+          userShiftTypes: types,
+          nurseProfile: np[0] ?? null,
+        };
       });
 
-      isOnboarded = Boolean(profile.displayName && userShiftTypes.length > 0);
+      isOnboarded = Boolean(
+        profile.displayName &&
+          profile.displayName.trim().length >= 2 &&
+          nurseProfile?.profession &&
+          userShiftTypes.length > 0,
+      );
     }
   }
 
