@@ -17,8 +17,12 @@
     }
   ],
   "vars": {
-    "ENVIRONMENT": "production",
-    "SUPABASE_URL": "",
-    "SUPABASE_ANON_KEY": ""
+    "ENVIRONMENT": "production"
+  },
+  "secrets": {
+    "required": [
+      "SUPABASE_URL",
+      "SUPABASE_ANON_KEY"
+    ]
   }
 }
