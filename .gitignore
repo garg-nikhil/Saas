@@ -8,5 +8,5 @@ coverage/
 !.env.example
 .wrangler/
 .react-router/
-.dev.vars
+.dev.vars*
 
