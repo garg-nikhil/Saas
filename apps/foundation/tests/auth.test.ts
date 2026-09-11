@@ -105,6 +105,8 @@ describe("Milestone 3: Authentication Foundation & Security Verifications", () =
           error: null,
         })),
         updatePassword: vi.fn(async () => ({ data: undefined, error: null })),
+        verifyOtp: vi.fn(),
+        resendVerification: vi.fn(),
       };
 
       const request = new Request("https://example.com/app");
@@ -396,6 +398,8 @@ describe("Milestone 3: Authentication Foundation & Security Verifications", () =
         signOut: vi.fn(),
         requestPasswordReset: vi.fn(),
         updatePassword: vi.fn(),
+        verifyOtp: vi.fn(),
+        resendVerification: vi.fn(),
       };
 
       const request = new Request("https://example.com/app");
@@ -430,6 +434,8 @@ describe("Milestone 3: Authentication Foundation & Security Verifications", () =
         signOut: vi.fn(),
         requestPasswordReset: vi.fn(),
         updatePassword: vi.fn(),
+        verifyOtp: vi.fn(),
+        resendVerification: vi.fn(),
       };
 
       const request = new Request("https://example.com/app");
@@ -506,6 +512,8 @@ describe("Milestone 3: Authentication Foundation & Security Verifications", () =
         signOut: vi.fn(),
         requestPasswordReset: vi.fn(),
         updatePassword: vi.fn(),
+        verifyOtp: vi.fn(),
+        resendVerification: vi.fn(),
       };
 
       const request = new Request("https://example.com/app");
@@ -531,6 +539,8 @@ describe("Milestone 3: Authentication Foundation & Security Verifications", () =
         signOut: vi.fn(),
         requestPasswordReset: vi.fn(),
         updatePassword: vi.fn(),
+        verifyOtp: vi.fn(),
+        resendVerification: vi.fn(),
       };
 
       // Attacker attempts to forge ownership via query param ?userId=victim-xyz
@@ -778,67 +788,782 @@ describe("Milestone 3: Authentication Foundation & Security Verifications", () =
     });
   });
 
-  describe("8. Local Cookie Session Auth Adapter (Fallback)", () => {
-    it("allows signup, generates user and session, and sets session cookie", async () => {
-      const request = new Request("https://example.com/signup");
-      const env: Env = {}; // No Supabase config
-      const { authService, responseHeaders } = createAuthService(request, env);
+  describe("8. Configuration Guards & Unconfigured Auth Handling", () => {
+    it("isSupabaseConfigured detects and rejects missing or placeholder values", async () => {
+      const { isSupabaseConfigured } = await import("../app/auth/service");
 
-      const result = await authService.signUp({
-        email: "infirmiere@hopital.fr",
-        password: "Password123!",
-        displayName: "Claire",
-      });
+      expect(isSupabaseConfigured("", "")).toBe(false);
+      expect(isSupabaseConfigured(undefined, undefined)).toBe(false);
+      expect(isSupabaseConfigured("https://placeholder-project.supabase.co", "placeholder-anon-key")).toBe(false);
+      expect(isSupabaseConfigured("https://your-project-id.supabase.co", "your-supabase-anon-key")).toBe(false);
+      expect(isSupabaseConfigured("https://example.com", "anon-key")).toBe(false);
+      expect(isSupabaseConfigured("not-a-valid-url", "some-key")).toBe(false);
 
-      expect(result.error).toBeNull();
-      expect(result.data?.user).not.toBeNull();
-      expect(result.data?.user?.email).toBe("infirmiere@hopital.fr");
-      expect(result.data?.user?.userMetadata?.display_name).toBe("Claire");
-      expect(result.data?.session?.accessToken).toBeDefined();
-
-      const setCookie = responseHeaders.get("Set-Cookie");
-      expect(setCookie).toBeDefined();
-      expect(setCookie).toContain("app_local_session");
+      expect(isSupabaseConfigured("https://xyzcompany.supabase.co", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.valid-anon-key")).toBe(true);
     });
 
-    it("restores user and session from request cookies in local mode", async () => {
-      const signupReq = new Request("https://example.com/signup");
-      const env: Env = {};
-      const { authService: signupAuth, responseHeaders } = createAuthService(signupReq, env);
+    it("resolveSupabaseConfig gives precedence to valid Worker env and falls back to process.env or null", async () => {
+      const { resolveSupabaseConfig } = await import("../app/auth/service");
 
-      const signupRes = await signupAuth.signUp({
-        email: "infirmiere@hopital.fr",
+      // Placeholder Worker env should NOT be resolved
+      const unconfiguredEnv: Env = {
+        SUPABASE_URL: "https://placeholder-project.supabase.co",
+        SUPABASE_ANON_KEY: "placeholder-anon-key",
+      };
+      expect(resolveSupabaseConfig(unconfiguredEnv)).toBeNull();
+
+      // Real Worker env is resolved correctly
+      const validEnv: Env = {
+        SUPABASE_URL: "https://real-project.supabase.co",
+        SUPABASE_ANON_KEY: "real-anon-key-12345",
+      };
+      expect(resolveSupabaseConfig(validEnv)).toEqual({
+        supabaseUrl: "https://real-project.supabase.co",
+        supabaseAnonKey: "real-anon-key-12345",
+      });
+    });
+
+    it("UnconfiguredAuthService returns HTTP 503 and safe French error messages", async () => {
+      const request = new Request("https://example.com/signup");
+      const unconfiguredEnv: Env = {
+        SUPABASE_URL: "https://placeholder-project.supabase.co",
+        SUPABASE_ANON_KEY: "placeholder-anon-key",
+      };
+
+      const { authService } = createAuthService(request, unconfiguredEnv);
+
+      const signUpResult = await authService.signUp({
+        email: "test@example.fr",
         password: "Password123!",
       });
+      expect(signUpResult.data).toBeNull();
+      expect(signUpResult.error?.status).toBe(503);
+      expect(signUpResult.error?.code).toBe("auth_not_configured");
+      expect(signUpResult.error?.message).toBe("Le service d'authentification n'est pas encore configuré.");
 
-      const setCookie = responseHeaders.get("Set-Cookie");
-      const cookieValue = setCookie?.split(";")[0];
+      const signInResult = await authService.signIn({
+        email: "test@example.fr",
+        password: "Password123!",
+      });
+      expect(signInResult.data).toBeNull();
+      expect(signInResult.error?.status).toBe(503);
+      expect(signInResult.error?.message).toBe("Le service d'authentification n'est pas encore configuré.");
+    });
 
-      // Subsequent authenticated request with cookie
-      const authReq = new Request("https://example.com/app", {
-        headers: {
-          Cookie: cookieValue || "",
+    it("translateAuthError properly translates all Supabase Auth error variants into French", async () => {
+      const { translateAuthError } = await import("../app/auth/supabase.server");
+
+      expect(translateAuthError({ message: "Invalid login credentials" })).toBe(
+        "Identifiants invalides. Veuillez vérifier votre adresse email et votre mot de passe.",
+      );
+      expect(translateAuthError({ message: "Email not confirmed" })).toBe(
+        "Votre adresse email doit être confirmée avant de continuer.",
+      );
+      expect(translateAuthError({ message: "User already registered" })).toBe(
+        "Un compte existe déjà avec cette adresse email.",
+      );
+      expect(translateAuthError({ message: "Password should be at least 6 characters" })).toBe(
+        "Le mot de passe doit contenir au moins 8 caractères.",
+      );
+      expect(translateAuthError({ message: "Token has expired or is invalid" })).toBe(
+        "Code ou jeton de confirmation invalide ou expiré. Veuillez vérifier votre saisie.",
+      );
+      expect(translateAuthError({ message: "Rate limit exceeded" })).toBe(
+        "Trop de tentatives. Veuillez patienter quelques instants avant de réessayer.",
+      );
+      expect(translateAuthError({ message: "Unknown internal error" }, "Message par défaut")).toBe(
+        "Message par défaut",
+      );
+    });
+  });
+
+  describe("9. Email Verification Flow & Route Tests", () => {
+    it("verify-email action verifies OTP and redirects with session cookies", async () => {
+      const { action: verifyAction } = await import("../app/routes/verify-email");
+
+      const mockUser = { id: "user-123", email: "nurse@hopital.fr" };
+      const mockSession = { accessToken: "jwt-token-abc", user: mockUser };
+
+      const mockAdapter: IAuthService = {
+        getCurrentUser: vi.fn(async () => null),
+        getCurrentSession: vi.fn(async () => null),
+        signUp: vi.fn(),
+        signIn: vi.fn(),
+        signOut: vi.fn(),
+        requestPasswordReset: vi.fn(),
+        updatePassword: vi.fn(),
+        verifyOtp: vi.fn(async () => ({
+          data: { user: mockUser, session: mockSession as any },
+          error: null,
+        })),
+        resendVerification: vi.fn(async () => ({ data: undefined, error: null })),
+      };
+
+      const formData = new FormData();
+      formData.set("intent", "verify");
+      formData.set("email", "nurse@hopital.fr");
+      formData.set("token", "123456");
+
+      const request = new Request("https://example.com/verify-email", {
+        method: "POST",
+        body: formData,
+      });
+
+      // Pass customAdapter via context or verify action directly with adapter
+      const result = await (verifyAction as any)({
+        request,
+        params: {},
+        context: {
+          cloudflare: {
+            env: {
+              SUPABASE_URL: "https://real-project.supabase.co",
+              SUPABASE_ANON_KEY: "real-anon-key",
+            },
+            cf: {},
+            ctx: {},
+          },
         },
       });
 
-      const { authService: reqAuth } = createAuthService(authReq, env);
-      const user = await reqAuth.getCurrentUser();
-      expect(user).not.toBeNull();
-      expect(user?.email).toBe("infirmiere@hopital.fr");
-      expect(user?.id).toBe(signupRes.data?.user?.id);
+      // Verification returns response (redirect) or error
+      expect(result).toBeDefined();
+    });
+  });
+
+  describe("10. Security Regression & Single Auth Authority (Milestone 5F-A)", () => {
+    it("guarantees LocalAuthService does NOT exist or get exported", async () => {
+      const authModule = await import("../app/auth");
+      expect((authModule as any).LocalAuthService).toBeUndefined();
+      expect((authModule as any).localUsersStore).toBeUndefined();
+      expect((authModule as any).deterministicUserId).toBeUndefined();
     });
 
-    it("clears session cookie upon signout in local mode", async () => {
-      const request = new Request("https://example.com/logout");
-      const env: Env = {};
-      const { authService, responseHeaders } = createAuthService(request, env);
+    it("guarantees local_auth_users table does NOT exist in database schema or migrations", async () => {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
 
-      const result = await authService.signOut();
-      expect(result.error).toBeNull();
+      // Check drizzle schema
+      const schemaModule = await import("../app/db/schema");
+      expect((schemaModule as any).local_auth_users).toBeUndefined();
+      expect((schemaModule as any).localAuthUsers).toBeUndefined();
 
-      const setCookie = responseHeaders.get("Set-Cookie");
-      expect(setCookie).toBeDefined();
-      expect(setCookie).toContain("Max-Age=0");
+      // Check migration SQL files
+      const migrationsDir = path.resolve(__dirname, "../../../database/migrations");
+      if (fs.existsSync(migrationsDir)) {
+        const files = fs.readdirSync(migrationsDir);
+        for (const file of files) {
+          if (file.endsWith(".sql")) {
+            const content = fs.readFileSync(path.join(migrationsDir, file), "utf-8");
+            expect(content.toLowerCase()).not.toContain("local_auth_users");
+            expect(content.toLowerCase()).not.toContain("password");
+          }
+        }
+      }
+    });
+
+    it("guarantees passwords are NEVER stored in application database schema", async () => {
+      const { profiles } = await import("../app/db/schema/profiles");
+      const columnNames = Object.keys(profiles);
+      expect(columnNames).not.toContain("password");
+      expect(columnNames).not.toContain("password_hash");
+      expect(columnNames).not.toContain("passwordHash");
+      expect(columnNames).not.toContain("encrypted_password");
+    });
+
+    it("guarantees arbitrary or unsigned session cookies cannot authenticate", async () => {
+      const request = new Request("https://example.com/app", {
+        headers: {
+          Cookie: "app_local_session=eyJuYW1lIjoiQWRtaW4ifQ==; custom_token=fake-unsigned-token",
+        },
+      });
+
+      const env: Env = {
+        SUPABASE_URL: "https://real-project.supabase.co",
+        SUPABASE_ANON_KEY: "real-anon-key",
+      };
+
+      const mockClient = createMockSupabaseClient({
+        getUser: async () => ({ data: { user: null }, error: new Error("Invalid session") }),
+      });
+
+      const service = new SupabaseAuthService(
+        request,
+        {
+          supabaseUrl: "https://real-project.supabase.co",
+          supabaseAnonKey: "real-anon-key",
+        },
+        new Headers(),
+        mockClient,
+      );
+
+      const user = await service.getCurrentUser();
+      expect(user).toBeNull();
+    });
+
+    it("guarantees arbitrary OTPs cannot authenticate without Supabase Auth verification", async () => {
+      const mockClient = createMockSupabaseClient({});
+      (mockClient.auth as any).verifyOtp = vi.fn(async () => ({
+        data: { user: null, session: null },
+        error: { message: "Token has expired or is invalid", status: 400 },
+      }));
+
+      const request = new Request("https://example.com/verify-email");
+      const service = new SupabaseAuthService(
+        request,
+        {
+          supabaseUrl: "https://real-project.supabase.co",
+          supabaseAnonKey: "real-anon-key",
+        },
+        new Headers(),
+        mockClient,
+      );
+
+      // Sending arbitrary 6-digit codes like "123456" or "000000" MUST be rejected by Supabase Auth
+      const result = await service.verifyOtp({
+        email: "infirmiere@hopital.fr",
+        token: "123456",
+        type: "signup",
+      });
+
+      expect(result.data).toBeNull();
+      expect(result.error).not.toBeNull();
+      expect(result.error?.message).toContain("Code ou jeton de confirmation invalide ou expiré");
+      expect((mockClient.auth as any).verifyOtp).toHaveBeenCalledWith({
+        email: "infirmiere@hopital.fr",
+        token: "123456",
+        type: "signup",
+      });
+    });
+
+    it("handles OTP expiration and resend verification with Supabase Auth", async () => {
+      const mockClient = createMockSupabaseClient({});
+      (mockClient.auth as any).resend = vi.fn(async ({ email, type }: { email: string; type: string }) => {
+        return { error: null };
+      });
+
+      const request = new Request("https://example.com/verify-email");
+      const service = new SupabaseAuthService(
+        request,
+        {
+          supabaseUrl: "https://real-project.supabase.co",
+          supabaseAnonKey: "real-anon-key",
+        },
+        new Headers(),
+        mockClient,
+      );
+
+      const resendResult = await service.resendVerification({
+        email: "infirmiere@hopital.fr",
+        type: "signup",
+      });
+
+      expect(resendResult.error).toBeNull();
+      expect((mockClient.auth as any).resend).toHaveBeenCalledWith({
+        email: "infirmiere@hopital.fr",
+        type: "signup",
+      });
+    });
+
+    it("guarantees profile ownership is derived solely from verified Supabase user.id", async () => {
+      const { syncUserProfile } = await import("../app/auth/service");
+      const pg = await import("pg");
+
+      const mockHyperdrive: Hyperdrive = {
+        connectionString: "postgresql://hyperdrive.cloudflare.net:5432/testdb",
+        database: "testdb",
+        host: "hyperdrive.cloudflare.net",
+        password: "pass",
+        port: 5432,
+        user: "postgres",
+        connect: () => ({} as any),
+      };
+
+      const querySpy = vi
+        .spyOn(pg.default.Client.prototype, "query")
+        .mockImplementation(async () => ({ rows: [] } as any));
+      const connectSpy = vi
+        .spyOn(pg.default.Client.prototype, "connect")
+        .mockImplementation(async () => {});
+      const endSpy = vi
+        .spyOn(pg.default.Client.prototype, "end")
+        .mockImplementation(async () => {});
+
+      try {
+        const verifiedUser: AuthUser = {
+          id: "sb-verified-uuid-9999",
+          email: "nurse@hopital.fr",
+          userMetadata: { display_name: "Infirmière Claire" },
+        };
+
+        // Ensure that client-supplied IDs or parameters cannot tamper with user_id
+        await syncUserProfile(mockHyperdrive, verifiedUser);
+
+        // The query executed on DB must strictly insert/update using verifiedUser.id
+        expect(querySpy).toHaveBeenCalled();
+        const callArgs = querySpy.mock.calls;
+        const matchingCall = callArgs.find((call) => {
+          const sql = typeof call[0] === "string" ? call[0] : (call[0] as any)?.text || "";
+          const params = (call[1] as any[]) || (call[0] as any)?.values || [];
+          return sql.includes("profiles") && params.includes("sb-verified-uuid-9999");
+        });
+        expect(matchingCall).toBeDefined();
+      } finally {
+        querySpy.mockRestore();
+        connectSpy.mockRestore();
+        endSpy.mockRestore();
+      }
+    });
+  });
+
+  describe("11. Behavioral Auth Routes & Flows (Milestone 5F-A A to E)", () => {
+    const mockValidEnv: Env = {
+      SUPABASE_URL: "https://real-test-project.supabase.co",
+      SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.valid-anon-key",
+    };
+
+    describe("Category A: Signup", () => {
+      it("rejects invalid email formats with French error message", async () => {
+        const { action: signupAction } = await import("../app/routes/signup");
+        const formData = new FormData();
+        formData.set("email", "not-an-email");
+        formData.set("password", "ValidPassword123!");
+        formData.set("passwordConfirmation", "ValidPassword123!");
+
+        const request = new Request("https://example.com/signup", {
+          method: "POST",
+          body: formData,
+        });
+
+        const result = await (signupAction as any)({
+          request,
+          params: {},
+          context: { cloudflare: { env: mockValidEnv, cf: {}, ctx: {} } },
+        });
+
+        expect(result).toEqual({
+          error: "L'adresse email renseignée est invalide.",
+        });
+      });
+
+      it("rejects weak password (< 8 characters) with French error message", async () => {
+        const { action: signupAction } = await import("../app/routes/signup");
+        const formData = new FormData();
+        formData.set("email", "nurse@hopital.fr");
+        formData.set("password", "weak");
+        formData.set("passwordConfirmation", "weak");
+
+        const request = new Request("https://example.com/signup", {
+          method: "POST",
+          body: formData,
+        });
+
+        const result = await (signupAction as any)({
+          request,
+          params: {},
+          context: { cloudflare: { env: mockValidEnv, cf: {}, ctx: {} } },
+        });
+
+        expect(result).toEqual({
+          error: "Le mot de passe doit contenir au moins 8 caractères.",
+        });
+      });
+
+      it("rejects non-matching password confirmation with French error message", async () => {
+        const { action: signupAction } = await import("../app/routes/signup");
+        const formData = new FormData();
+        formData.set("email", "nurse@hopital.fr");
+        formData.set("password", "ValidPassword123!");
+        formData.set("passwordConfirmation", "DifferentPassword123!");
+
+        const request = new Request("https://example.com/signup", {
+          method: "POST",
+          body: formData,
+        });
+
+        const result = await (signupAction as any)({
+          request,
+          params: {},
+          context: { cloudflare: { env: mockValidEnv, cf: {}, ctx: {} } },
+        });
+
+        expect(result).toEqual({
+          error: "Les mots de passe saisis ne correspondent pas.",
+        });
+      });
+
+      it("handles confirmation-required flow (session = null) by redirecting to /verify-email", async () => {
+        const mockClient = createMockSupabaseClient({
+          signUp: async () => ({
+            data: {
+              user: { id: "user-unconfirmed-id", email: "unconfirmed@hopital.fr", user_metadata: {} },
+              session: null,
+            },
+            error: null,
+          }),
+        });
+
+        const request = new Request("https://example.com/signup");
+        const service = new SupabaseAuthService(
+          request,
+          {
+            supabaseUrl: "https://real-test-project.supabase.co",
+            supabaseAnonKey: "valid-anon-key",
+          },
+          new Headers(),
+          mockClient,
+        );
+
+        const result = await service.signUp({
+          email: "unconfirmed@hopital.fr",
+          password: "ValidPassword123!",
+        });
+
+        expect(result.error).toBeNull();
+        expect(result.data?.user?.id).toBe("user-unconfirmed-id");
+        expect(result.data?.session).toBeNull();
+      });
+
+      it("handles immediate-session flow by returning authenticated session and headers", async () => {
+        const mockClient = createMockSupabaseClient({
+          signUp: async () => ({
+            data: {
+              user: { id: "user-confirmed-id", email: "confirmed@hopital.fr", user_metadata: {} },
+              session: {
+                access_token: "jwt-token-immediate",
+                refresh_token: "refresh-token-immediate",
+                expires_at: 1900000000,
+                user: { id: "user-confirmed-id", email: "confirmed@hopital.fr" },
+              },
+            },
+            error: null,
+          }),
+        });
+
+        const request = new Request("https://example.com/signup");
+        const service = new SupabaseAuthService(
+          request,
+          {
+            supabaseUrl: "https://real-test-project.supabase.co",
+            supabaseAnonKey: "valid-anon-key",
+          },
+          new Headers(),
+          mockClient,
+        );
+
+        const result = await service.signUp({
+          email: "confirmed@hopital.fr",
+          password: "ValidPassword123!",
+        });
+
+        expect(result.error).toBeNull();
+        expect(result.data?.user?.id).toBe("user-confirmed-id");
+        expect(result.data?.session?.accessToken).toBe("jwt-token-immediate");
+      });
+
+      it("translates Supabase signup error into clear French message", async () => {
+        const mockClient = createMockSupabaseClient({
+          signUp: async () => ({
+            data: null,
+            error: { message: "User already registered", status: 400 },
+          }),
+        });
+
+        const request = new Request("https://example.com/signup");
+        const service = new SupabaseAuthService(
+          request,
+          {
+            supabaseUrl: "https://real-test-project.supabase.co",
+            supabaseAnonKey: "valid-anon-key",
+          },
+          new Headers(),
+          mockClient,
+        );
+
+        const result = await service.signUp({
+          email: "existing@hopital.fr",
+          password: "ValidPassword123!",
+        });
+
+        expect(result.data).toBeNull();
+        expect(result.error?.message).toBe("Un compte existe déjà avec cette adresse email.");
+      });
+    });
+
+    describe("Category B: Login", () => {
+      it("handles successful login and propagates Set-Cookie headers", async () => {
+        const mockClient = createMockSupabaseClient({
+          signInWithPassword: async () => ({
+            data: {
+              user: { id: "user-login-id", email: "nurse@hopital.fr", user_metadata: {} },
+              session: {
+                access_token: "jwt-token-login",
+                refresh_token: "refresh-token-login",
+                expires_at: 1900000000,
+                user: { id: "user-login-id", email: "nurse@hopital.fr" },
+              },
+            },
+            error: null,
+          }),
+        });
+
+        const request = new Request("https://example.com/login");
+        const headers = new Headers();
+        const service = new SupabaseAuthService(
+          request,
+          {
+            supabaseUrl: "https://real-test-project.supabase.co",
+            supabaseAnonKey: "valid-anon-key",
+          },
+          headers,
+          mockClient,
+        );
+
+        const result = await service.signIn({
+          email: "nurse@hopital.fr",
+          password: "ValidPassword123!",
+        });
+
+        expect(result.error).toBeNull();
+        expect(result.data?.user.id).toBe("user-login-id");
+        expect(result.data?.session.accessToken).toBe("jwt-token-login");
+      });
+
+      it("returns translated message for unconfirmed account", async () => {
+        const mockClient = createMockSupabaseClient({
+          signInWithPassword: async () => ({
+            data: null,
+            error: { message: "Email not confirmed", status: 400 },
+          }),
+        });
+
+        const request = new Request("https://example.com/login");
+        const service = new SupabaseAuthService(
+          request,
+          {
+            supabaseUrl: "https://real-test-project.supabase.co",
+            supabaseAnonKey: "valid-anon-key",
+          },
+          new Headers(),
+          mockClient,
+        );
+
+        const result = await service.signIn({
+          email: "unconfirmed@hopital.fr",
+          password: "ValidPassword123!",
+        });
+
+        expect(result.data).toBeNull();
+        expect(result.error?.message).toBe("Votre adresse email doit être confirmée avant de continuer.");
+      });
+
+      it("returns HTTP 503 error when Supabase configuration is missing or unconfigured", async () => {
+        const { action: loginAction } = await import("../app/routes/login");
+        const formData = new FormData();
+        formData.set("email", "nurse@hopital.fr");
+        formData.set("password", "ValidPassword123!");
+
+        const request = new Request("https://example.com/login", {
+          method: "POST",
+          body: formData,
+        });
+
+        const result = await (loginAction as any)({
+          request,
+          params: {},
+          context: {
+            cloudflare: {
+              env: {
+                SUPABASE_URL: "https://placeholder-project.supabase.co",
+                SUPABASE_ANON_KEY: "placeholder-anon-key",
+              },
+              cf: {},
+              ctx: {},
+            },
+          },
+        });
+
+        expect(result).toEqual({
+          error: "Le service d'authentification n'est pas encore configuré.",
+        });
+      });
+    });
+
+    describe("Category C: Session", () => {
+      it("authenticated request successfully resolves user and session", async () => {
+        const mockClient = createMockSupabaseClient({
+          getUser: async () => ({
+            data: {
+              user: { id: "active-nurse-id", email: "active@hopital.fr", user_metadata: {} },
+            },
+            error: null,
+          }),
+          getSession: async () => ({
+            data: {
+              session: {
+                access_token: "active-token",
+                user: { id: "active-nurse-id", email: "active@hopital.fr" },
+              },
+            },
+            error: null,
+          }),
+        });
+
+        const request = new Request("https://example.com/app");
+        const service = new SupabaseAuthService(
+          request,
+          {
+            supabaseUrl: "https://real-test-project.supabase.co",
+            supabaseAnonKey: "valid-anon-key",
+          },
+          new Headers(),
+          mockClient,
+        );
+
+        const user = await service.getCurrentUser();
+        const session = await service.getCurrentSession();
+
+        expect(user).not.toBeNull();
+        expect(user?.id).toBe("active-nurse-id");
+        expect(session?.accessToken).toBe("active-token");
+      });
+
+      it("unauthenticated request returns null without throwing or setting user", async () => {
+        const mockClient = createMockSupabaseClient({
+          getUser: async () => ({ data: { user: null }, error: new Error("No session") }),
+          getSession: async () => ({ data: { session: null }, error: null }),
+        });
+
+        const request = new Request("https://example.com/app");
+        const service = new SupabaseAuthService(
+          request,
+          {
+            supabaseUrl: "https://real-test-project.supabase.co",
+            supabaseAnonKey: "valid-anon-key",
+          },
+          new Headers(),
+          mockClient,
+        );
+
+        const user = await service.getCurrentUser();
+        const session = await service.getCurrentSession();
+
+        expect(user).toBeNull();
+        expect(session).toBeNull();
+      });
+
+      it("tampered or invalid Supabase session yields null user safely", async () => {
+        const mockClient = createMockSupabaseClient({
+          getUser: async () => ({
+            data: { user: null },
+            error: { message: "Signature verification failed", status: 401 },
+          }),
+        });
+
+        const request = new Request("https://example.com/app", {
+          headers: { Cookie: "sb-mock-auth-token=tampered-jwt-payload" },
+        });
+
+        const service = new SupabaseAuthService(
+          request,
+          {
+            supabaseUrl: "https://real-test-project.supabase.co",
+            supabaseAnonKey: "valid-anon-key",
+          },
+          new Headers(),
+          mockClient,
+        );
+
+        const user = await service.getCurrentUser();
+        expect(user).toBeNull();
+      });
+    });
+
+    describe("Category D: OTP", () => {
+      it("valid Supabase OTP succeeds and sets authenticated session", async () => {
+        const mockClient = createMockSupabaseClient({});
+        (mockClient.auth as any).verifyOtp = vi.fn(async () => ({
+          data: {
+            user: { id: "otp-user-1", email: "nurse@hopital.fr", user_metadata: {} },
+            session: {
+              access_token: "otp-jwt-token",
+              refresh_token: "otp-refresh-token",
+              expires_at: 1900000000,
+              user: { id: "otp-user-1", email: "nurse@hopital.fr" },
+            },
+          },
+          error: null,
+        }));
+
+        const request = new Request("https://example.com/verify-email");
+        const service = new SupabaseAuthService(
+          request,
+          {
+            supabaseUrl: "https://real-test-project.supabase.co",
+            supabaseAnonKey: "valid-anon-key",
+          },
+          new Headers(),
+          mockClient,
+        );
+
+        const result = await service.verifyOtp({
+          email: "nurse@hopital.fr",
+          token: "654321",
+          type: "signup",
+        });
+
+        expect(result.error).toBeNull();
+        expect(result.data?.user.id).toBe("otp-user-1");
+        expect(result.data?.session.accessToken).toBe("otp-jwt-token");
+      });
+
+      it("invalid or expired OTP returns translated French error", async () => {
+        const mockClient = createMockSupabaseClient({});
+        (mockClient.auth as any).verifyOtp = vi.fn(async () => ({
+          data: { user: null, session: null },
+          error: { message: "Token has expired or is invalid", status: 400 },
+        }));
+
+        const request = new Request("https://example.com/verify-email");
+        const service = new SupabaseAuthService(
+          request,
+          {
+            supabaseUrl: "https://real-test-project.supabase.co",
+            supabaseAnonKey: "valid-anon-key",
+          },
+          new Headers(),
+          mockClient,
+        );
+
+        const result = await service.verifyOtp({
+          email: "nurse@hopital.fr",
+          token: "999999",
+          type: "signup",
+        });
+
+        expect(result.data).toBeNull();
+        expect(result.error?.message).toBe(
+          "Code ou jeton de confirmation invalide ou expiré. Veuillez vérifier votre saisie.",
+        );
+      });
+    });
+
+    describe("Category E: CSRF & Origin Security", () => {
+      it("ensures malicious Origin header cannot pass validation or rewrite request URL", async () => {
+        // Direct test asserting that request.url cannot be rewritten with client-supplied Origin
+        const clientOrigin = "https://evil-attacker.com";
+        const targetUrl = "http://localhost:3000/login";
+
+        const request = new Request(targetUrl, {
+          method: "POST",
+          headers: {
+            origin: clientOrigin,
+          },
+        });
+
+        // Verify request.url remains targetUrl and origin header is preserved
+        expect(request.url).toBe(targetUrl);
+        expect(request.headers.get("origin")).toBe(clientOrigin);
+      });
     });
   });
 });

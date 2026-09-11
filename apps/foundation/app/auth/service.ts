@@ -4,10 +4,10 @@ import type { Env } from "../context";
 import { withDb } from "../db/client";
 import { profiles, type Profile } from "../db/schema/profiles";
 import { SupabaseAuthService } from "./supabase.server";
-import { LocalAuthService } from "./local.server";
 import type {
   AuthSession,
   AuthUser,
+  AuthResult,
   IAuthService,
   AuthServiceResult,
 } from "./types";
@@ -63,14 +63,25 @@ export function isSupabaseConfigured(
   const trimmedKey = key.trim();
   if (trimmedUrl.length === 0 || trimmedKey.length === 0) return false;
 
+  const lowerUrl = trimmedUrl.toLowerCase();
+  const lowerKey = trimmedKey.toLowerCase();
+
   // Filter out placeholder domains and dummy values
-  if (
-    trimmedUrl.includes("placeholder-project") ||
-    trimmedUrl.includes("your-project-id") ||
-    trimmedKey.includes("placeholder-anon-key") ||
-    trimmedKey.includes("your-supabase-anon-key")
-  ) {
-    return false;
+  const placeholderPatterns = [
+    "placeholder-project",
+    "placeholder-anon-key",
+    "your-project-id",
+    "your-supabase-anon-key",
+    "placeholder",
+    "dummy",
+    "example.com",
+    "supabase.co/placeholder",
+  ];
+
+  for (const pattern of placeholderPatterns) {
+    if (lowerUrl.includes(pattern) || lowerKey.includes(pattern)) {
+      return false;
+    }
   }
 
   try {
@@ -88,6 +99,137 @@ export function isSupabaseConfigured(
   return true;
 }
 
+export interface SupabaseConfig {
+  supabaseUrl: string;
+  supabaseAnonKey: string;
+}
+
+/**
+ * Resolves valid Supabase configuration from Worker environment or process.env,
+ * strictly ignoring placeholder or missing credentials.
+ */
+export function resolveSupabaseConfig(env?: Env): SupabaseConfig | null {
+  // 1. Prefer runtime Cloudflare Worker env
+  if (
+    env?.SUPABASE_URL &&
+    env?.SUPABASE_ANON_KEY &&
+    isSupabaseConfigured(env.SUPABASE_URL, env.SUPABASE_ANON_KEY)
+  ) {
+    return {
+      supabaseUrl: env.SUPABASE_URL.trim(),
+      supabaseAnonKey: env.SUPABASE_ANON_KEY.trim(),
+    };
+  }
+
+  // 2. Check Node / preview runtime environment
+  if (
+    typeof process !== "undefined" &&
+    process.env?.SUPABASE_URL &&
+    process.env?.SUPABASE_ANON_KEY &&
+    isSupabaseConfigured(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY)
+  ) {
+    return {
+      supabaseUrl: process.env.SUPABASE_URL.trim(),
+      supabaseAnonKey: process.env.SUPABASE_ANON_KEY.trim(),
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Unconfigured authentication service adapter.
+ * Returns safe French error messages and HTTP 503 semantics when Supabase credentials are missing or placeholders.
+ */
+export class UnconfiguredAuthService implements IAuthService {
+  private responseHeaders: Headers;
+
+  constructor(responseHeaders: Headers = new Headers()) {
+    this.responseHeaders = responseHeaders;
+  }
+
+  async getCurrentUser(): Promise<AuthUser | null> {
+    return null;
+  }
+
+  async getCurrentSession(): Promise<AuthSession | null> {
+    return null;
+  }
+
+  async signUp(): Promise<AuthResult<{ user: AuthUser | null; session: AuthSession | null }>> {
+    return {
+      data: null,
+      error: {
+        message: "Le service d'authentification n'est pas encore configuré.",
+        code: "auth_not_configured",
+        status: 503,
+      },
+    };
+  }
+
+  async signIn(): Promise<AuthResult<{ user: AuthUser; session: AuthSession }>> {
+    return {
+      data: null,
+      error: {
+        message: "Le service d'authentification n'est pas encore configuré.",
+        code: "auth_not_configured",
+        status: 503,
+      },
+    };
+  }
+
+  async signOut(): Promise<AuthResult<void>> {
+    return {
+      data: undefined,
+      error: null,
+    };
+  }
+
+  async requestPasswordReset(): Promise<AuthResult<void>> {
+    return {
+      data: null,
+      error: {
+        message: "Le service d'authentification n'est pas encore configuré.",
+        code: "auth_not_configured",
+        status: 503,
+      },
+    };
+  }
+
+  async updatePassword(): Promise<AuthResult<void>> {
+    return {
+      data: null,
+      error: {
+        message: "Le service d'authentification n'est pas encore configuré.",
+        code: "auth_not_configured",
+        status: 503,
+      },
+    };
+  }
+
+  async verifyOtp(): Promise<AuthResult<{ user: AuthUser; session: AuthSession }>> {
+    return {
+      data: null,
+      error: {
+        message: "Le service d'authentification n'est pas encore configuré.",
+        code: "auth_not_configured",
+        status: 503,
+      },
+    };
+  }
+
+  async resendVerification(): Promise<AuthResult<void>> {
+    return {
+      data: null,
+      error: {
+        message: "Le service d'authentification n'est pas encore configuré.",
+        code: "auth_not_configured",
+        status: 503,
+      },
+    };
+  }
+}
+
 /**
  * Creates the internal AuthService boundary instance for the current request.
  *
@@ -96,7 +238,7 @@ export function isSupabaseConfigured(
  */
 export function createAuthService(
   request: Request,
-  env: Env,
+  env?: Env,
   customAdapter?: IAuthService,
 ): AuthServiceResult {
   const responseHeaders = new Headers();
@@ -108,16 +250,12 @@ export function createAuthService(
     };
   }
 
-  const supabaseUrl = env.SUPABASE_URL || process.env.SUPABASE_URL;
-  const supabaseAnonKey = env.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+  const config = resolveSupabaseConfig(env);
 
-  if (supabaseUrl && supabaseAnonKey && isSupabaseConfigured(supabaseUrl, supabaseAnonKey)) {
+  if (config) {
     const authService = new SupabaseAuthService(
       request,
-      {
-        supabaseUrl,
-        supabaseAnonKey,
-      },
+      config,
       responseHeaders,
     );
 
@@ -127,15 +265,9 @@ export function createAuthService(
     };
   }
 
-  // Fallback to local cookie-based session auth service
-  const localAuthService = new LocalAuthService(
-    request,
-    responseHeaders,
-    env?.HYPERDRIVE,
-  );
-
+  // When unconfigured, return UnconfiguredAuthService with 503 French error semantics
   return {
-    authService: localAuthService,
+    authService: new UnconfiguredAuthService(responseHeaders),
     responseHeaders,
   };
 }

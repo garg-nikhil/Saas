@@ -51,11 +51,9 @@ export async function action({ request, context }: Route.ActionArgs) {
 
   // Handle Resend Verification Code
   if (intent === "resend") {
-    if (authService.resendVerification) {
-      const { error } = await authService.resendVerification({ email, type: "signup" });
-      if (error) {
-        return { error: error.message || "Impossible de renvoyer l'email de confirmation pour le moment." };
-      }
+    const { error } = await authService.resendVerification({ email, type: "signup" });
+    if (error) {
+      return { error: error.message || "Impossible de renvoyer l'email de confirmation pour le moment." };
     }
     return {
       success: true,
@@ -69,31 +67,26 @@ export async function action({ request, context }: Route.ActionArgs) {
     return { error: "Veuillez renseigner le code ou jeton de confirmation reçu par email." };
   }
 
-  if (authService.verifyOtp) {
-    const { data, error } = await authService.verifyOtp({
+  const { data, error } = await authService.verifyOtp({
+    email,
+    token,
+    type: "signup",
+  });
+
+  if (error || !data?.user) {
+    return {
+      error: error?.message || "Code de confirmation invalide ou expiré. Veuillez vérifier votre saisie.",
       email,
-      token,
-      type: "signup",
-    });
-
-    if (error || !data?.user) {
-      return {
-        error: error?.message || "Code de confirmation invalide ou expiré. Veuillez vérifier votre saisie.",
-        email,
-      };
-    }
-
-    if (env.HYPERDRIVE) {
-      await syncUserProfile(env.HYPERDRIVE, data.user);
-    }
-
-    return redirect("/app?toast=Votre%20compte%20a%20%C3%A9t%C3%A9%20v%C3%A9rifi%C3%A9%20avec%20succ%C3%A8s&toastType=success", {
-      headers: responseHeaders,
-    });
+    };
   }
 
-  // Fallback direct sign-in validation if verification service is unavailable
-  return redirect("/login?verified=true&email=" + encodeURIComponent(email));
+  if (env.HYPERDRIVE) {
+    await syncUserProfile(env.HYPERDRIVE, data.user);
+  }
+
+  return redirect("/app/onboarding?toast=Votre%20compte%20a%20%C3%A9t%C3%A9%20v%C3%A9rifi%C3%A9%20avec%20succ%C3%A8s&toastType=success", {
+    headers: responseHeaders,
+  });
 }
 
 export default function VerifyEmail() {

@@ -54,6 +54,8 @@ describe("Milestone 4A — Factory Security & Isolation Controls", () => {
         signOut: vi.fn(),
         requestPasswordReset: vi.fn(),
         updatePassword: vi.fn(),
+        verifyOtp: vi.fn(),
+        resendVerification: vi.fn(),
       };
 
       // Attempting to send an arbitrary custom price ID in payload

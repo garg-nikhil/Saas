@@ -21,6 +21,90 @@ export interface SupabaseAuthOptions {
 }
 
 /**
+ * Translates Supabase Auth errors into user-friendly French messages.
+ * Never exposes raw Supabase errors, URLs, keys, or stack traces.
+ */
+export function translateAuthError(
+  error: { message?: string; code?: string; status?: number } | null | undefined,
+  defaultMessage = "Une erreur est survenue lors de l'authentification.",
+): string {
+  if (!error) return defaultMessage;
+  const msg = (error.message || "").toLowerCase();
+  const code = (error.code || "").toLowerCase();
+
+  if (
+    msg.includes("invalid login credentials") ||
+    msg.includes("invalid_grant") ||
+    msg.includes("invalid credentials") ||
+    code === "invalid_credentials" ||
+    code === "invalid_grant"
+  ) {
+    return "Identifiants invalides. Veuillez vérifier votre adresse email et votre mot de passe.";
+  }
+
+  if (
+    msg.includes("email not confirmed") ||
+    msg.includes("not confirmed") ||
+    code === "email_not_confirmed"
+  ) {
+    return "Votre adresse email doit être confirmée avant de continuer.";
+  }
+
+  if (
+    msg.includes("already registered") ||
+    msg.includes("user already exists") ||
+    code === "user_already_exists"
+  ) {
+    return "Un compte existe déjà avec cette adresse email.";
+  }
+
+  if (
+    msg.includes("password should be") ||
+    msg.includes("password is too short") ||
+    code === "weak_password"
+  ) {
+    return "Le mot de passe doit contenir au moins 8 caractères.";
+  }
+
+  if (
+    msg.includes("rate limit") ||
+    msg.includes("too many requests") ||
+    code === "over_request_rate_limit" ||
+    code === "over_email_send_rate_limit"
+  ) {
+    return "Trop de tentatives. Veuillez patienter quelques instants avant de réessayer.";
+  }
+
+  if (
+    msg.includes("token has expired") ||
+    msg.includes("otp has expired") ||
+    msg.includes("invalid token") ||
+    msg.includes("token is invalid") ||
+    code === "otp_expired" ||
+    code === "invalid_token"
+  ) {
+    return "Code ou jeton de confirmation invalide ou expiré. Veuillez vérifier votre saisie.";
+  }
+
+  if (
+    msg.includes("not configured") ||
+    code === "auth_not_configured" ||
+    error.status === 503
+  ) {
+    return "Le service d'authentification n'est pas encore configuré.";
+  }
+
+  if (
+    msg.includes("signups not allowed") ||
+    msg.includes("signup disabled")
+  ) {
+    return "Les inscriptions sont actuellement désactivées.";
+  }
+
+  return defaultMessage;
+}
+
+/**
  * Supabase Auth adapter for Cloudflare Workers SSR.
  *
  * Implements the internal IAuthService interface so that the application
@@ -147,7 +231,10 @@ export class SupabaseAuthService implements IAuthService {
         return {
           data: null,
           error: {
-            message: error.message,
+            message: translateAuthError(
+              error,
+              "Impossible de créer votre compte. Veuillez réessayer.",
+            ),
             code: error.code,
             status: error.status,
           },
@@ -178,12 +265,11 @@ export class SupabaseAuthService implements IAuthService {
         },
         error: null,
       };
-    } catch (err: unknown) {
+    } catch {
       return {
         data: null,
         error: {
-          message:
-            err instanceof Error ? err.message : "Une erreur inattendue est survenue lors de l'inscription.",
+          message: "Impossible de créer votre compte. Veuillez réessayer.",
         },
       };
     }
@@ -203,11 +289,18 @@ export class SupabaseAuthService implements IAuthService {
       });
 
       if (error || !data.user || !data.session) {
+        const isUnconfirmed =
+          error &&
+          ((error.message || "").toLowerCase().includes("not confirmed") ||
+            (error as { code?: string }).code === "email_not_confirmed");
+
         return {
           data: null,
           error: {
-            message: "Identifiants invalides. Veuillez vérifier votre adresse email et votre mot de passe.",
-            code: "invalid_credentials",
+            message: isUnconfirmed
+              ? "Votre adresse email doit être confirmée avant de continuer."
+              : "Identifiants invalides. Veuillez vérifier votre adresse email et votre mot de passe.",
+            code: isUnconfirmed ? "email_not_confirmed" : "invalid_credentials",
             status: 400,
           },
         };
@@ -255,19 +348,18 @@ export class SupabaseAuthService implements IAuthService {
         return {
           data: null,
           error: {
-            message: error.message,
+            message: translateAuthError(error, "Erreur lors de la déconnexion."),
             code: error.code,
             status: error.status,
           },
         };
       }
       return { data: undefined, error: null };
-    } catch (err: unknown) {
+    } catch {
       return {
         data: null,
         error: {
-          message:
-            err instanceof Error ? err.message : "Erreur lors de la déconnexion.",
+          message: "Erreur lors de la déconnexion.",
         },
       };
     }
@@ -293,7 +385,10 @@ export class SupabaseAuthService implements IAuthService {
         return {
           data: null,
           error: {
-            message: "Une erreur temporaire est survenue. Veuillez réessayer.",
+            message: translateAuthError(
+              error,
+              "Une erreur temporaire est survenue. Veuillez réessayer.",
+            ),
             code: error.code,
             status: error.status,
           },
@@ -326,7 +421,10 @@ export class SupabaseAuthService implements IAuthService {
         return {
           data: null,
           error: {
-            message: error.message,
+            message: translateAuthError(
+              error,
+              "Impossible de mettre à jour le mot de passe. Le lien a peut-être expiré.",
+            ),
             code: error.code,
             status: error.status,
           },
@@ -334,12 +432,11 @@ export class SupabaseAuthService implements IAuthService {
       }
 
       return { data: undefined, error: null };
-    } catch (err: unknown) {
+    } catch {
       return {
         data: null,
         error: {
-          message:
-            err instanceof Error ? err.message : "Erreur lors de la mise à jour du mot de passe.",
+          message: "Impossible de mettre à jour le mot de passe. Le lien a peut-être expiré.",
         },
       };
     }
@@ -362,7 +459,10 @@ export class SupabaseAuthService implements IAuthService {
         return {
           data: null,
           error: {
-            message: error?.message || "Code ou jeton de vérification invalide ou expiré.",
+            message: translateAuthError(
+              error,
+              "Code ou jeton de confirmation invalide ou expiré. Veuillez vérifier votre saisie.",
+            ),
             code: error?.code || "invalid_token",
             status: error?.status || 400,
           },
@@ -389,12 +489,11 @@ export class SupabaseAuthService implements IAuthService {
         },
         error: null,
       };
-    } catch (err: unknown) {
+    } catch {
       return {
         data: null,
         error: {
-          message:
-            err instanceof Error ? err.message : "Erreur lors de la vérification de l'email.",
+          message: "Code ou jeton de confirmation invalide ou expiré. Veuillez vérifier votre saisie.",
         },
       };
     }
@@ -416,7 +515,10 @@ export class SupabaseAuthService implements IAuthService {
         return {
           data: null,
           error: {
-            message: error.message,
+            message: translateAuthError(
+              error,
+              "Impossible de renvoyer l'email de confirmation pour le moment.",
+            ),
             code: error.code,
             status: error.status,
           },
@@ -424,12 +526,11 @@ export class SupabaseAuthService implements IAuthService {
       }
 
       return { data: undefined, error: null };
-    } catch (err: unknown) {
+    } catch {
       return {
         data: null,
         error: {
-          message:
-            err instanceof Error ? err.message : "Erreur lors de l'envoi de l'email de confirmation.",
+          message: "Impossible de renvoyer l'email de confirmation pour le moment.",
         },
       };
     }

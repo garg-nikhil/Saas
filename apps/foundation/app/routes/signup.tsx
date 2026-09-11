@@ -83,7 +83,7 @@ export async function action({ request, context }: Route.ActionArgs) {
     };
   }
 
-  const { authService } = createAuthService(request, env);
+  const { authService, responseHeaders } = createAuthService(request, env);
   const { data, error } = await authService.signUp({
     email,
     password,
@@ -94,7 +94,7 @@ export async function action({ request, context }: Route.ActionArgs) {
     return {
       error:
         error.message ||
-        "Une erreur est survenue lors de la création de votre compte.",
+        "Impossible de créer votre compte. Veuillez réessayer.",
     };
   }
 
@@ -102,8 +102,20 @@ export async function action({ request, context }: Route.ActionArgs) {
     await syncUserProfile(env.HYPERDRIVE, data.user, displayName);
   }
 
-  // Redirect to email verification page
-  return redirect(`/verify-email?email=${encodeURIComponent(email)}&registered=true`);
+  // Case B: Immediate session created (email confirmation disabled)
+  if (data?.session) {
+    return redirect("/app/onboarding", {
+      headers: responseHeaders,
+    });
+  }
+
+  // Case A: Confirmation required (session is null)
+  return redirect(
+    `/verify-email?email=${encodeURIComponent(email)}&registered=true`,
+    {
+      headers: responseHeaders,
+    },
+  );
 }
 
 export default function Signup() {

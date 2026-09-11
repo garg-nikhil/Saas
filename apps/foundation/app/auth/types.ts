@@ -79,10 +79,10 @@ export interface IAuthService {
   signOut(): Promise<AuthResult<void>>;
   requestPasswordReset(input: PasswordResetInput): Promise<AuthResult<void>>;
   updatePassword(input: UpdatePasswordInput): Promise<AuthResult<void>>;
-  verifyOtp?(
+  verifyOtp(
     input: VerifyOtpInput,
   ): Promise<AuthResult<{ user: AuthUser; session: AuthSession }>>;
-  resendVerification?(
+  resendVerification(
     input: ResendVerificationInput,
   ): Promise<AuthResult<void>>;
 }
