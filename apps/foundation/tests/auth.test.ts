@@ -777,4 +777,69 @@ describe("Milestone 3: Authentication Foundation & Security Verifications", () =
       });
     });
   });
+
+  describe("8. Local Cookie Session Auth Adapter (Fallback)", () => {
+    it("allows signup, generates user and session, and sets session cookie", async () => {
+      const request = new Request("https://example.com/signup");
+      const env: Env = {}; // No Supabase config
+      const { authService, responseHeaders } = createAuthService(request, env);
+
+      const result = await authService.signUp({
+        email: "infirmiere@hopital.fr",
+        password: "Password123!",
+        displayName: "Claire",
+      });
+
+      expect(result.error).toBeNull();
+      expect(result.data?.user).not.toBeNull();
+      expect(result.data?.user?.email).toBe("infirmiere@hopital.fr");
+      expect(result.data?.user?.userMetadata?.display_name).toBe("Claire");
+      expect(result.data?.session?.accessToken).toBeDefined();
+
+      const setCookie = responseHeaders.get("Set-Cookie");
+      expect(setCookie).toBeDefined();
+      expect(setCookie).toContain("app_local_session");
+    });
+
+    it("restores user and session from request cookies in local mode", async () => {
+      const signupReq = new Request("https://example.com/signup");
+      const env: Env = {};
+      const { authService: signupAuth, responseHeaders } = createAuthService(signupReq, env);
+
+      const signupRes = await signupAuth.signUp({
+        email: "infirmiere@hopital.fr",
+        password: "Password123!",
+      });
+
+      const setCookie = responseHeaders.get("Set-Cookie");
+      const cookieValue = setCookie?.split(";")[0];
+
+      // Subsequent authenticated request with cookie
+      const authReq = new Request("https://example.com/app", {
+        headers: {
+          Cookie: cookieValue || "",
+        },
+      });
+
+      const { authService: reqAuth } = createAuthService(authReq, env);
+      const user = await reqAuth.getCurrentUser();
+      expect(user).not.toBeNull();
+      expect(user?.email).toBe("infirmiere@hopital.fr");
+      expect(user?.id).toBe(signupRes.data?.user?.id);
+    });
+
+    it("clears session cookie upon signout in local mode", async () => {
+      const request = new Request("https://example.com/logout");
+      const env: Env = {};
+      const { authService, responseHeaders } = createAuthService(request, env);
+
+      const result = await authService.signOut();
+      expect(result.error).toBeNull();
+
+      const setCookie = responseHeaders.get("Set-Cookie");
+      expect(setCookie).toBeDefined();
+      expect(setCookie).toContain("Max-Age=0");
+    });
+  });
 });
+

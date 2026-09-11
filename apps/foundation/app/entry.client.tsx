@@ -12,6 +12,20 @@ if (typeof document !== "undefined" && document.documentElement) {
   }
 }
 
+// Suppress known React 19 false-positive warning for framework-injected script tags (<Scripts />, <ScrollRestoration />)
+if (typeof window !== "undefined") {
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => {
+    if (
+      typeof args[0] === "string" &&
+      args[0].includes("Encountered a script tag while rendering React component")
+    ) {
+      return;
+    }
+    originalConsoleError(...args);
+  };
+}
+
 startTransition(() => {
   hydrateRoot(
     document,

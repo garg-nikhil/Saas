@@ -344,4 +344,94 @@ export class SupabaseAuthService implements IAuthService {
       };
     }
   }
+
+  /**
+   * Verifies an OTP or email confirmation token.
+   */
+  async verifyOtp(
+    input: { email: string; token: string; type?: "signup" | "recovery" | "email_change" },
+  ): Promise<AuthResult<{ user: AuthUser; session: AuthSession }>> {
+    try {
+      const { data, error } = await this.client.auth.verifyOtp({
+        email: input.email,
+        token: input.token,
+        type: input.type ?? "signup",
+      });
+
+      if (error || !data.user || !data.session) {
+        return {
+          data: null,
+          error: {
+            message: error?.message || "Code ou jeton de vérification invalide ou expiré.",
+            code: error?.code || "invalid_token",
+            status: error?.status || 400,
+          },
+        };
+      }
+
+      return {
+        data: {
+          user: {
+            id: data.user.id,
+            email: data.user.email ?? null,
+            userMetadata: data.user.user_metadata,
+          },
+          session: {
+            accessToken: data.session.access_token,
+            refreshToken: data.session.refresh_token,
+            expiresAt: data.session.expires_at,
+            user: {
+              id: data.session.user.id,
+              email: data.session.user.email ?? null,
+              userMetadata: data.session.user.user_metadata,
+            },
+          },
+        },
+        error: null,
+      };
+    } catch (err: unknown) {
+      return {
+        data: null,
+        error: {
+          message:
+            err instanceof Error ? err.message : "Erreur lors de la vérification de l'email.",
+        },
+      };
+    }
+  }
+
+  /**
+   * Resends verification email.
+   */
+  async resendVerification(
+    input: { email: string; type?: "signup" | "email_change" },
+  ): Promise<AuthResult<void>> {
+    try {
+      const { error } = await this.client.auth.resend({
+        type: input.type ?? "signup",
+        email: input.email,
+      });
+
+      if (error) {
+        return {
+          data: null,
+          error: {
+            message: error.message,
+            code: error.code,
+            status: error.status,
+          },
+        };
+      }
+
+      return { data: undefined, error: null };
+    } catch (err: unknown) {
+      return {
+        data: null,
+        error: {
+          message:
+            err instanceof Error ? err.message : "Erreur lors de l'envoi de l'email de confirmation.",
+        },
+      };
+    }
+  }
 }

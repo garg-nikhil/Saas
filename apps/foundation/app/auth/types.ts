@@ -39,6 +39,17 @@ export interface UpdatePasswordInput {
   newPassword: string;
 }
 
+export interface VerifyOtpInput {
+  email: string;
+  token: string;
+  type?: "signup" | "recovery" | "email_change";
+}
+
+export interface ResendVerificationInput {
+  email: string;
+  type?: "signup" | "email_change";
+}
+
 export interface AuthError {
   message: string;
   code?: string;
@@ -68,6 +79,12 @@ export interface IAuthService {
   signOut(): Promise<AuthResult<void>>;
   requestPasswordReset(input: PasswordResetInput): Promise<AuthResult<void>>;
   updatePassword(input: UpdatePasswordInput): Promise<AuthResult<void>>;
+  verifyOtp?(
+    input: VerifyOtpInput,
+  ): Promise<AuthResult<{ user: AuthUser; session: AuthSession }>>;
+  resendVerification?(
+    input: ResendVerificationInput,
+  ): Promise<AuthResult<void>>;
 }
 
 export interface AuthServiceResult {

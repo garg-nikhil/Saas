@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import {
   isRouteErrorResponse,
   Links,
@@ -8,18 +7,9 @@ import {
   ScrollRestoration,
 } from "react-router";
 import "./app.css";
+import { ToastProvider } from "./components/Toast";
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  useEffect(() => {
-    if (typeof document !== "undefined" && document.documentElement) {
-      for (const a of Array.from(document.documentElement.attributes)) {
-        if (a.name.startsWith("__") || a.name.includes("token")) {
-          document.documentElement.removeAttribute(a.name);
-        }
-      }
-    }
-  }, []);
-
   return (
     <html lang="fr" suppressHydrationWarning>
       <head>
@@ -29,7 +19,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body suppressHydrationWarning>
-        {children}
+        <ToastProvider>{children}</ToastProvider>
         <ScrollRestoration />
         <Scripts />
       </body>
@@ -52,11 +42,11 @@ export function ErrorBoundary({ error }: { error: unknown }) {
   }
 
   return (
-    <main className="container">
-      <div className="card">
-        <h1>{message}</h1>
-        <p className="subtitle">{details}</p>
-        <a href="/" className="btn btn-secondary">
+    <main className="container" id="root-error-view">
+      <div className="card" id="root-error-card">
+        <h1 id="root-error-title">{message}</h1>
+        <p className="subtitle" id="root-error-subtitle">{details}</p>
+        <a href="/" className="btn btn-secondary" id="root-error-home-btn">
           Retour à l'accueil
         </a>
       </div>

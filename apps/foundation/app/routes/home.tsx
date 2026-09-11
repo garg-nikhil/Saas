@@ -1,3 +1,9 @@
+import { redirect } from "react-router";
+import type { Route } from "./+types/home";
+import { getAppEnv } from "../context";
+import { getOptionalAuth } from "../auth";
+import { ArrowRightIcon, LockIcon, UserIcon } from "../components/Icons";
+
 export function meta() {
   return [
     { title: "Planning Infirmier — Gestion de planning pour infirmiers et infirmières" },
@@ -5,7 +11,17 @@ export function meta() {
   ];
 }
 
-export async function loader() {
+export async function loader({ request, context }: Route.LoaderArgs) {
+  const env = getAppEnv(context);
+  const { user, headers } = await getOptionalAuth(request, env);
+
+  // Automatically redirect active authenticated sessions directly to dashboard
+  if (user) {
+    throw redirect("/app", {
+      headers,
+    });
+  }
+
   return {
     renderedAt: new Date().toISOString(),
   };
@@ -50,11 +66,23 @@ export default function Home() {
         </div>
 
         <div className="button-group" id="home-actions" style={{ justifyContent: "center" }}>
-          <a href="/login" className="btn btn-primary" id="btn-login">
-            Se connecter
+          <a
+            href="/login"
+            className="btn btn-primary"
+            id="btn-login"
+            style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem" }}
+          >
+            <span>Se connecter</span>
+            <ArrowRightIcon size={16} />
           </a>
-          <a href="/signup" className="btn btn-secondary" id="btn-signup">
-            Créer un compte
+          <a
+            href="/signup"
+            className="btn btn-secondary"
+            id="btn-signup"
+            style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem" }}
+          >
+            <UserIcon size={16} />
+            <span>Créer un compte</span>
           </a>
         </div>
       </div>

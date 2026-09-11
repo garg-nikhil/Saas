@@ -1,14 +1,21 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Form, Link, useActionData, useLoaderData, useNavigation } from "react-router";
 import { eq, and, gte, lte, or, isNull, asc } from "drizzle-orm";
+import { motion, AnimatePresence } from "motion/react";
 import type { Route } from "./+types/app.planning";
 import { getAppEnv } from "../context";
 import { requireAuth, syncUserProfile } from "../auth";
 import { withDb } from "../db/client";
-import { shifts, shiftTypes, recurringShifts, seedDefaultShiftTypes, type ShiftType } from "../db/schema/planning";
-import { calculateShiftDuration } from "../domain/planning/shifts";
+import { shifts, shiftTypes, recurringShifts, seedDefaultShiftTypes } from "../db/schema/planning";
+import {
+  calculateShiftDuration,
+  validateShiftOverlap,
+  generateShiftsCsv,
+  type ShiftIntervalInput,
+} from "../domain/planning/shifts";
 import { validateRecurrenceRule, generateOccurrenceDates } from "../domain/planning/recurrence";
 import { createAnalyticsService } from "../services/analytics";
+import { WorkHoursChart } from "../components/planning/WorkHoursChart";
 
 export function meta() {
   return [
@@ -72,6 +79,15 @@ function getDaysForCalendarMonth(year: number, month: number) {
   return days;
 }
 
+function getAdjacentDate(dateStr: string, dayOffset: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + dayOffset);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate()
+  ).padStart(2, "0")}`;
+}
+
 export async function loader({ request, context }: Route.LoaderArgs) {
   const env = getAppEnv(context);
   const { user } = await requireAuth(request, env);
@@ -131,9 +147,12 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     notes: string | null;
   }> = [];
 
+  let nurseDisplayName = user.email?.split("@")[0] || "Infirmier";
+
   if (env.HYPERDRIVE) {
     const profile = await syncUserProfile(env.HYPERDRIVE, user);
     if (profile) {
+      nurseDisplayName = profile.displayName || nurseDisplayName;
       await withDb(env.HYPERDRIVE, async (db) => {
         await seedDefaultShiftTypes(db, profile.id);
 
@@ -234,6 +253,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 
   return {
     user: { email: user.email },
+    nurseDisplayName,
     currentMonth,
     shiftTypesList,
     shiftsList,
@@ -264,12 +284,15 @@ export async function action({ request, context }: Route.ActionArgs) {
   const endTime = formData.get("endTime")?.toString().trim() || null;
   const notes = formData.get("notes")?.toString().trim() || null;
 
-  if (intent === "create_shift") {
+  if (intent === "create_shift" || intent === "update_shift") {
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return { error: "Veuillez indiquer une date valide (YYYY-MM-DD)." };
     }
     if (!shiftTypeId) {
       return { error: "Veuillez sélectionner un type de garde." };
+    }
+    if (intent === "update_shift" && !shiftId) {
+      return { error: "Identifiant de garde manquant." };
     }
 
     if (startTime || endTime) {
@@ -285,8 +308,25 @@ export async function action({ request, context }: Route.ActionArgs) {
     let insertedShiftId: string | null = null;
     try {
       await withDb(env.HYPERDRIVE, async (db) => {
+        if (intent === "update_shift") {
+          const existing = await db
+            .select({ id: shifts.id })
+            .from(shifts)
+            .where(and(eq(shifts.id, shiftId!), eq(shifts.profileId, profile.id)))
+            .limit(1);
+
+          if (!existing || existing.length === 0) {
+            throw new Error("Garde non trouvée ou accès refusé.");
+          }
+        }
+
         const validShiftType = await db
-          .select({ id: shiftTypes.id })
+          .select({
+            id: shiftTypes.id,
+            name: shiftTypes.name,
+            startTime: shiftTypes.startTime,
+            endTime: shiftTypes.endTime,
+          })
           .from(shiftTypes)
           .where(
             and(
@@ -296,28 +336,102 @@ export async function action({ request, context }: Route.ActionArgs) {
           )
           .limit(1);
 
-        if (validShiftType.length === 0) {
+        if (!validShiftType || validShiftType.length === 0) {
           throw new Error("Type de garde invalide ou non autorisé.");
         }
 
-        const inserted = await db
-          .insert(shifts)
-          .values({
-            profileId: profile.id,
-            shiftTypeId,
-            date,
-            startTime,
-            endTime,
-            notes,
-          })
-          .returning({ id: shifts.id });
+        const selectedTypeObj = validShiftType[0];
+        const effectiveStart = startTime || selectedTypeObj.startTime;
+        const effectiveEnd = endTime || selectedTypeObj.endTime;
 
-        if (inserted.length > 0) {
-          insertedShiftId = inserted[0].id;
+        // Fetch surrounding shifts (day before, same day, day after) for robust overlap checking
+        const prevDay = getAdjacentDate(date, -1);
+        const nextDay = getAdjacentDate(date, 1);
+
+        let surroundingShifts: any[] = [];
+        try {
+          const surroundingQuery = db
+            .select({
+              id: shifts.id,
+              date: shifts.date,
+              startTime: shifts.startTime,
+              endTime: shifts.endTime,
+              shiftTypeId: shifts.shiftTypeId,
+            })
+            .from(shifts)
+            .where(
+              and(
+                eq(shifts.profileId, profile.id),
+                gte(shifts.date, prevDay),
+                lte(shifts.date, nextDay),
+              ),
+            );
+
+          surroundingShifts = (await surroundingQuery) || [];
+        } catch {
+          surroundingShifts = [];
+        }
+
+        const existingIntervals: ShiftIntervalInput[] = (
+          Array.isArray(surroundingShifts) ? surroundingShifts : []
+        )
+          .filter((s) => s && s.id)
+          .map((s) => ({
+            id: s.id,
+            date: s.date,
+            startTime: s.startTime,
+            endTime: s.endTime,
+            name: "Garde existante",
+          }));
+
+        const candidateInput: ShiftIntervalInput = {
+          id: intent === "update_shift" ? shiftId : null,
+          date,
+          startTime: effectiveStart,
+          endTime: effectiveEnd,
+          name: selectedTypeObj.name,
+        };
+
+        const overlapResult = validateShiftOverlap(candidateInput, existingIntervals);
+        if (overlapResult.hasOverlap) {
+          throw new Error(
+            overlapResult.message ||
+              "Conflit d'horaires : cette garde chevauche un autre horaire déjà planifié."
+          );
+        }
+
+        if (intent === "create_shift") {
+          const inserted = await db
+            .insert(shifts)
+            .values({
+              profileId: profile.id,
+              shiftTypeId,
+              date,
+              startTime,
+              endTime,
+              notes,
+            })
+            .returning({ id: shifts.id });
+
+          if (inserted && inserted.length > 0) {
+            insertedShiftId = inserted[0].id;
+          }
+        } else {
+          await db
+            .update(shifts)
+            .set({
+              shiftTypeId,
+              date,
+              startTime,
+              endTime,
+              notes,
+              updatedAt: new Date(),
+            })
+            .where(and(eq(shifts.id, shiftId!), eq(shifts.profileId, profile.id)));
         }
       });
 
-      if (insertedShiftId) {
+      if (intent === "create_shift" && insertedShiftId) {
         try {
           const analytics = createAnalyticsService(env);
           await analytics.track({
@@ -331,77 +445,25 @@ export async function action({ request, context }: Route.ActionArgs) {
         } catch {
           // Analytics error ignored
         }
+        return { success: true, message: "Garde ajoutée avec succès." };
+      } else if (intent === "update_shift") {
+        try {
+          const analytics = createAnalyticsService(env);
+          await analytics.track({
+            distinctId: profile.id,
+            event: "shift_updated",
+            properties: {
+              shift_id: shiftId,
+              shift_type_id: shiftTypeId,
+            },
+          });
+        } catch {
+          // Analytics error ignored
+        }
+        return { success: true, message: "Garde mise à jour avec succès." };
       }
-
-      return { success: true, message: "Garde ajoutée avec succès." };
     } catch (err: any) {
       return { error: err.message || "Impossible d'enregistrer la garde." };
-    }
-  }
-
-  if (intent === "update_shift") {
-    if (!shiftId) {
-      return { error: "Identifiant de garde manquant." };
-    }
-    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return { error: "Veuillez indiquer une date valide (YYYY-MM-DD)." };
-    }
-    if (!shiftTypeId) {
-      return { error: "Veuillez sélectionner un type de garde." };
-    }
-
-    if (startTime || endTime) {
-      if (!startTime || !endTime) {
-        return { error: "Les heures de début et de fin doivent être toutes les deux renseignées ou vides." };
-      }
-      const durationCheck = calculateShiftDuration({ startTime, endTime });
-      if (!durationCheck.success) {
-        return { error: durationCheck.error.message || "Plage horaire de garde invalide." };
-      }
-    }
-
-    try {
-      await withDb(env.HYPERDRIVE, async (db) => {
-        const existing = await db
-          .select({ id: shifts.id })
-          .from(shifts)
-          .where(and(eq(shifts.id, shiftId), eq(shifts.profileId, profile.id)))
-          .limit(1);
-
-        if (existing.length === 0) {
-          throw new Error("Garde non trouvée ou accès refusé.");
-        }
-
-        await db
-          .update(shifts)
-          .set({
-            shiftTypeId,
-            date,
-            startTime,
-            endTime,
-            notes,
-            updatedAt: new Date(),
-          })
-          .where(and(eq(shifts.id, shiftId), eq(shifts.profileId, profile.id)));
-      });
-
-      try {
-        const analytics = createAnalyticsService(env);
-        await analytics.track({
-          distinctId: profile.id,
-          event: "shift_updated",
-          properties: {
-            shift_id: shiftId,
-            shift_type_id: shiftTypeId,
-          },
-        });
-      } catch {
-        // Analytics error ignored
-      }
-
-      return { success: true, message: "Garde mise à jour avec succès." };
-    } catch (err: any) {
-      return { error: err.message || "Impossible de modifier la garde." };
     }
   }
 
@@ -656,43 +718,38 @@ export async function action({ request, context }: Route.ActionArgs) {
         // Analytics error ignored
       }
 
-      return {
-        success: true,
-        message: "Roulement récurrent supprimé. Cette action n'efface pas les gardes déjà créées dans le planning.",
-      };
+      return { success: true, message: "Roulement récurrent supprimé avec succès." };
     } catch (err: any) {
       return { error: err.message || "Impossible de supprimer le roulement récurrent." };
     }
   }
 
-  return { error: "Action non reconnue." };
+  return null;
 }
 
 export default function Planning() {
-  const { currentMonth, shiftTypesList, shiftsList, recurringShiftsList } =
+  const { currentMonth, shiftTypesList, shiftsList, recurringShiftsList, nurseDisplayName } =
     useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state === "submitting";
 
+  const [showStats, setShowStats] = useState(true);
+  const [csvNotice, setCsvNotice] = useState(false);
+
   const [yearNum, monthNum] = currentMonth.split("-").map(Number);
   const calendarDays = getDaysForCalendarMonth(yearNum, monthNum);
 
-  const prevMonth =
-    monthNum === 1
-      ? `${yearNum - 1}-12`
-      : `${yearNum}-${String(monthNum - 1).padStart(2, "0")}`;
+  const prevMonthDate = new Date(yearNum, monthNum - 2, 1);
+  const nextMonthDate = new Date(yearNum, monthNum, 1);
+  const prevMonth = `${prevMonthDate.getFullYear()}-${String(prevMonthDate.getMonth() + 1).padStart(2, "0")}`;
+  const nextMonth = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, "0")}`;
+  const todayMonth = new Date().toISOString().slice(0, 7);
+  const todayStr = new Date().toISOString().slice(0, 10);
 
-  const nextMonth =
-    monthNum === 12
-      ? `${yearNum + 1}-01`
-      : `${yearNum}-${String(monthNum + 1).padStart(2, "0")}`;
+  const monthLabel = `${MONTH_NAMES_FR[monthNum - 1]} ${yearNum}`;
 
-  const today = new Date();
-  const todayMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-
-  // Single Shift Modal State
+  // Single Shift Modal States
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<"create" | "edit">("create");
   const [selectedShift, setSelectedShift] = useState<{
@@ -827,6 +884,57 @@ export default function Planning() {
         })
       : null;
 
+  // Live Overlap Detection inside the modal
+  const liveOverlapResult = useMemo(() => {
+    if (!selectedShift.date || !selectedShift.shiftTypeId) {
+      return null;
+    }
+    const currentType = shiftTypesList.find((st) => st.id === selectedShift.shiftTypeId);
+    const effectiveStart = selectedShift.startTime || currentType?.startTime || null;
+    const effectiveEnd = selectedShift.endTime || currentType?.endTime || null;
+
+    if (!effectiveStart || !effectiveEnd) {
+      return null;
+    }
+
+    const candidate: ShiftIntervalInput = {
+      id: selectedShift.id || null,
+      date: selectedShift.date,
+      startTime: effectiveStart,
+      endTime: effectiveEnd,
+      name: currentType?.name || "Garde",
+    };
+
+    const existingIntervals: ShiftIntervalInput[] = shiftsList.map((s) => {
+      const typeDef = shiftTypesList.find((t) => t.id === s.shiftTypeId);
+      return {
+        id: s.id,
+        date: s.date,
+        startTime: s.startTime || typeDef?.startTime || null,
+        endTime: s.endTime || typeDef?.endTime || null,
+        name: s.shiftType?.name || typeDef?.name || "Garde existante",
+      };
+    });
+
+    return validateShiftOverlap(candidate, existingIntervals);
+  }, [selectedShift, shiftTypesList, shiftsList]);
+
+  // CSV export function
+  const handleExportCsv = () => {
+    const csvData = generateShiftsCsv(shiftsList, monthLabel);
+    const blob = new Blob([csvData], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.setAttribute("download", `planning_infirmier_${currentMonth}.csv`);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setCsvNotice(true);
+    setTimeout(() => setCsvNotice(false), 4000);
+  };
+
   // Dynamic client-side validation for recurring modal
   let recurringValidationError: string | null = null;
 
@@ -885,210 +993,263 @@ export default function Planning() {
   const totalEstimatedHours = singleShiftHours && liveOccurrences.length > 0 ? Math.round(liveOccurrences.length * singleShiftHours) : null;
 
   return (
-    <div className="card" id="planning-card">
-      {/* Calendar Header Navigation */}
-      <div className="calendar-header-bar" id="planning-header">
-        <div>
-          <h1 className="calendar-month-title" id="planning-title">
-            📅 {MONTH_NAMES_FR[monthNum - 1]} {yearNum}
-          </h1>
-          <p className="subtitle" id="planning-subtitle" style={{ marginBottom: 0 }}>
-            Planning et garde de travail infirmier
-          </p>
-        </div>
+    <div className="space-y-4" id="planning-page-wrapper">
+      {/* Visual Analytics Chart */}
+      {showStats && (
+        <WorkHoursChart
+          shifts={shiftsList}
+          monthLabel={monthLabel}
+          nurseName={nurseDisplayName}
+        />
+      )}
 
-        <div className="calendar-nav-group" id="planning-nav-group">
-          <Link
-            to={`/app/planning?month=${prevMonth}`}
-            className="btn btn-secondary btn-sm"
-            id="btn-prev-month"
-            aria-label="Mois précédent"
-          >
-            ←
-          </Link>
-          <Link
-            to={`/app/planning?month=${todayMonth}`}
-            className="btn btn-secondary btn-sm"
-            id="btn-today-month"
-          >
-            Aujourd'hui
-          </Link>
-          <Link
-            to={`/app/planning?month=${nextMonth}`}
-            className="btn btn-secondary btn-sm"
-            id="btn-next-month"
-            aria-label="Mois suivant"
-          >
-            →
-          </Link>
+      {/* Main Calendar Card */}
+      <div className="card" id="planning-card">
+        {/* Calendar Header Navigation */}
+        <div className="calendar-header-bar" id="planning-header">
+          <div>
+            <h1 className="calendar-month-title flex items-center gap-2" id="planning-title">
+              <span>📅 {MONTH_NAMES_FR[monthNum - 1]} {yearNum}</span>
+            </h1>
+            <p className="subtitle" id="planning-subtitle" style={{ marginBottom: 0 }}>
+              Planning et gardes de travail infirmier ({shiftsList.length} garde{shiftsList.length > 1 ? "s" : ""})
+            </p>
+          </div>
 
-          {recurringShiftsList.length > 0 && (
+          <div className="calendar-nav-group" id="planning-nav-group">
+            <Link
+              to={`/app/planning?month=${prevMonth}`}
+              className="btn btn-secondary btn-sm"
+              id="btn-prev-month"
+              aria-label="Mois précédent"
+            >
+              ←
+            </Link>
+            <Link
+              to={`/app/planning?month=${todayMonth}`}
+              className="btn btn-secondary btn-sm"
+              id="btn-today-month"
+            >
+              Aujourd'hui
+            </Link>
+            <Link
+              to={`/app/planning?month=${nextMonth}`}
+              className="btn btn-secondary btn-sm"
+              id="btn-next-month"
+              aria-label="Mois suivant"
+            >
+              →
+            </Link>
+
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              onClick={() => setManageRecurringModalOpen(true)}
-              id="btn-manage-recurring"
+              onClick={handleExportCsv}
+              id="btn-export-csv"
+              title="Exporter les gardes de ce mois au format CSV pour tableur"
               style={{ marginLeft: "0.25rem" }}
             >
-              📋 Roulements ({recurringShiftsList.length})
+              📥 CSV
             </button>
-          )}
 
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={handleOpenRecurringCreate}
-            id="btn-add-recurring"
-            style={{ marginLeft: "0.25rem" }}
-          >
-            🔄 Roulement récurrent
-          </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setShowStats((prev) => !prev)}
+              id="btn-toggle-stats"
+              title="Afficher/masquer la synthèse graphique des heures"
+              style={{ marginLeft: "0.25rem" }}
+            >
+              📊 {showStats ? "Masquer stats" : "Stats"}
+            </button>
 
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() => handleOpenCreate()}
-            id="btn-add-shift"
-            style={{ marginLeft: "0.25rem" }}
-          >
-            + Ajouter une garde
-          </button>
-        </div>
-      </div>
-
-      {actionData?.error && (
-        <div className="alert alert-error" role="alert" id="planning-error-alert">
-          {actionData.error}
-        </div>
-      )}
-
-      {actionData?.success && (
-        <div className="alert alert-success" role="status" id="planning-success-alert">
-          {actionData.message}
-        </div>
-      )}
-
-      {/* Calendar Month Grid */}
-      <div className="calendar-grid-container" id="planning-calendar-grid">
-        <div className="calendar-weekdays" id="planning-weekdays-header">
-          {WEEKDAYS_FR.map((day) => (
-            <div key={day} className="calendar-weekday" id={`weekday-${day}`}>
-              {day}
-            </div>
-          ))}
-        </div>
-
-        <div className="calendar-days-grid" id="planning-days-grid">
-          {calendarDays.map((cell) => {
-            const dayShifts = shiftsList.filter((s) => s.date === cell.dateStr);
-            const isToday = cell.dateStr === todayStr;
-
-            return (
-              <div
-                key={cell.dateStr}
-                className={`calendar-day-cell ${!cell.isCurrentMonth ? "outside-month" : ""} ${
-                  isToday ? "is-today" : ""
-                }`}
-                onClick={() => handleOpenCreate(cell.dateStr)}
-                id={`cell-${cell.dateStr}`}
+            {recurringShiftsList.length > 0 && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setManageRecurringModalOpen(true)}
+                id="btn-manage-recurring"
+                style={{ marginLeft: "0.25rem" }}
               >
-                <div className="calendar-day-header">
-                  <span className="calendar-date-num">{cell.dayNumber}</span>
-                  <button
-                    type="button"
-                    className="btn-add-day-shift"
-                    title="Ajouter une garde"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleOpenCreate(cell.dateStr);
-                    }}
-                    id={`btn-add-day-${cell.dateStr}`}
-                  >
-                    +
-                  </button>
-                </div>
+                📋 Roulements ({recurringShiftsList.length})
+              </button>
+            )}
 
-                {dayShifts.map((s) => {
-                  const durationRes =
-                    s.startTime && s.endTime
-                      ? calculateShiftDuration({ startTime: s.startTime, endTime: s.endTime })
-                      : null;
-
-                  const color = s.shiftType?.color || "#0284c7";
-
-                  return (
-                    <button
-                      type="button"
-                      key={s.id}
-                      className="shift-badge"
-                      style={{ backgroundColor: color }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleOpenEdit(s);
-                      }}
-                      id={`shift-badge-${s.id}`}
-                      title={`${s.shiftType?.name || "Garde"} ${
-                        s.startTime ? `(${s.startTime}-${s.endTime})` : ""
-                      }`}
-                    >
-                      <div className="shift-badge-header">
-                        <span>{s.shiftType?.name || "Garde"}</span>
-                        {s.shiftType?.shortCode && (
-                          <span style={{ opacity: 0.85 }}>[{s.shiftType.shortCode}]</span>
-                        )}
-                      </div>
-
-                      {s.startTime && s.endTime && (
-                        <div className="shift-badge-time">
-                          {s.startTime} - {s.endTime}
-                        </div>
-                      )}
-
-                      {durationRes?.success && (
-                        <div className="shift-badge-duration">
-                          ⏱ {durationRes.formatted}
-                          {durationRes.isOvernight ? " 🌙" : ""}
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Empty State when no shifts in selected month */}
-      {shiftsList.length === 0 && (
-        <div className="empty-planning-card" id="planning-empty-state">
-          <div className="empty-planning-icon">🩺</div>
-          <h2 className="empty-planning-title" id="empty-state-title">
-            Aucune garde planifiée pour ce mois
-          </h2>
-          <p className="empty-planning-desc" id="empty-state-desc">
-            Commencez par ajouter vos gardes ou roulements récurrents pour visualiser votre planning et calculer automatiquement vos heures de travail.
-          </p>
-          <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center" }}>
             <button
               type="button"
-              className="btn btn-primary"
-              onClick={() => handleOpenCreate()}
-              id="btn-add-first-shift"
-            >
-              + Ajouter ma première garde
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
+              className="btn btn-secondary btn-sm"
               onClick={handleOpenRecurringCreate}
-              id="btn-add-first-recurring"
+              id="btn-add-recurring"
+              style={{ marginLeft: "0.25rem" }}
             >
-              🔄 Créer un roulement récurrent
+              🔄 Roulement récurrent
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => handleOpenCreate()}
+              id="btn-add-shift"
+              style={{ marginLeft: "0.25rem" }}
+            >
+              + Ajouter une garde
             </button>
           </div>
         </div>
-      )}
+
+        {csvNotice && (
+          <div className="alert alert-success" role="status" id="csv-export-notice">
+            ✅ Planning du mois exporté au format CSV avec succès (encodage UTF-8 Excel).
+          </div>
+        )}
+
+        {actionData?.error && (
+          <div className="alert alert-error" role="alert" id="planning-error-alert">
+            <div className="flex items-center gap-2">
+              <span className="text-base">⚠️</span>
+              <span className="font-semibold">{actionData.error}</span>
+            </div>
+          </div>
+        )}
+
+        {actionData?.success && (
+          <div className="alert alert-success" role="status" id="planning-success-alert">
+            {actionData.message}
+          </div>
+        )}
+
+        {/* Framer-Motion Animated Calendar Month Grid */}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={currentMonth}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.22, ease: "easeInOut" }}
+            className="calendar-grid-container"
+            id="planning-calendar-grid"
+          >
+            <div className="calendar-weekdays" id="planning-weekdays-header">
+              {WEEKDAYS_FR.map((day) => (
+                <div key={day} className="calendar-weekday" id={`weekday-${day}`}>
+                  {day}
+                </div>
+              ))}
+            </div>
+
+            <div className="calendar-days-grid" id="planning-days-grid">
+              {calendarDays.map((cell) => {
+                const dayShifts = shiftsList.filter((s) => s.date === cell.dateStr);
+                const isToday = cell.dateStr === todayStr;
+
+                return (
+                  <div
+                    key={cell.dateStr}
+                    className={`calendar-day-cell ${!cell.isCurrentMonth ? "outside-month" : ""} ${
+                      isToday ? "is-today" : ""
+                    }`}
+                    onClick={() => handleOpenCreate(cell.dateStr)}
+                    id={`cell-${cell.dateStr}`}
+                  >
+                    <div className="calendar-day-header">
+                      <span className="calendar-date-num">{cell.dayNumber}</span>
+                      <button
+                        type="button"
+                        className="btn-add-day-shift"
+                        title="Ajouter une garde"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenCreate(cell.dateStr);
+                        }}
+                        id={`btn-add-day-${cell.dateStr}`}
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    {dayShifts.map((s) => {
+                      const durationRes =
+                        s.startTime && s.endTime
+                          ? calculateShiftDuration({ startTime: s.startTime, endTime: s.endTime })
+                          : null;
+
+                      const color = s.shiftType?.color || "#0284c7";
+
+                      return (
+                        <button
+                          type="button"
+                          key={s.id}
+                          className="shift-badge cursor-pointer"
+                          style={{ backgroundColor: color }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenEdit(s);
+                          }}
+                          id={`shift-badge-${s.id}`}
+                          title={`${s.shiftType?.name || "Garde"} ${
+                            s.startTime ? `(${s.startTime}-${s.endTime})` : ""
+                          }`}
+                        >
+                          <div className="shift-badge-header">
+                            <span>{s.shiftType?.name || "Garde"}</span>
+                            {s.shiftType?.shortCode && (
+                              <span style={{ opacity: 0.85 }}>[{s.shiftType.shortCode}]</span>
+                            )}
+                          </div>
+
+                          {s.startTime && s.endTime && (
+                            <div className="shift-badge-time">
+                              {s.startTime} - {s.endTime}
+                            </div>
+                          )}
+
+                          {durationRes?.success && (
+                            <div className="shift-badge-duration">
+                              ⏱ {durationRes.formatted}
+                              {durationRes.isOvernight ? " 🌙" : ""}
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        </AnimatePresence>
+
+        {/* Empty State when no shifts in selected month */}
+        {shiftsList.length === 0 && (
+          <div className="empty-planning-card" id="planning-empty-state">
+            <div className="empty-planning-icon">🩺</div>
+            <h2 className="empty-planning-title" id="empty-state-title">
+              Aucune garde planifiée pour ce mois
+            </h2>
+            <p className="empty-planning-desc" id="empty-state-desc">
+              Commencez par ajouter vos gardes ou roulements récurrents pour visualiser votre planning et calculer automatiquement vos heures de travail.
+            </p>
+            <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center" }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => handleOpenCreate()}
+                id="btn-add-first-shift"
+              >
+                + Ajouter ma première garde
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleOpenRecurringCreate}
+                id="btn-add-first-recurring"
+              >
+                🔄 Créer un roulement récurrent
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Modal Dialog for Create / Edit Single Shift */}
       {modalOpen && (
@@ -1195,6 +1356,7 @@ export default function Planning() {
                   </div>
                 </div>
 
+                {/* Duration Preview Box */}
                 {liveDurationResult && (
                   <div className="duration-preview-box" id="shift-duration-preview">
                     {liveDurationResult.success ? (
@@ -1210,6 +1372,22 @@ export default function Planning() {
                         ⚠️ {liveDurationResult.error.message}
                       </span>
                     )}
+                  </div>
+                )}
+
+                {/* Live Overlap Warning Alert */}
+                {liveOverlapResult?.hasOverlap && (
+                  <div
+                    className="p-3 my-2 bg-amber-50 border border-amber-300 text-amber-900 rounded-lg text-xs flex items-start gap-2 shadow-2xs"
+                    id="live-overlap-warning"
+                  >
+                    <span className="text-base leading-none">⚠️</span>
+                    <div>
+                      <strong>Avertissement de chevauchement :</strong>
+                      <p className="mt-0.5 m-0 leading-tight">
+                        {liveOverlapResult.message}
+                      </p>
+                    </div>
                   </div>
                 )}
 
@@ -1317,7 +1495,6 @@ export default function Planning() {
                     <span>📌 1. Type de garde / Roulement</span>
                   </div>
 
-                  {/* Large touch cards for quick selection on mobile */}
                   <div className="mobile-touch-card-grid" id="recurring-shift-type-cards">
                     {shiftTypesList.map((st) => {
                       const isSelected = recurringForm.shiftTypeId === st.id;
@@ -1351,7 +1528,6 @@ export default function Planning() {
                     <span>🔄 2. Rythme & Fréquence</span>
                   </div>
 
-                  {/* Segmented Control for Frequency */}
                   <div className="segmented-control" id="recurring-frequency-segmented">
                     <button
                       type="button"
@@ -1382,7 +1558,7 @@ export default function Planning() {
                   </div>
                 </div>
 
-                {/* Interval Control with Large Stepper */}
+                {/* Interval Control with Stepper */}
                 <div className="form-group" style={{ marginBottom: "1.25rem" }}>
                   <label htmlFor="recurring-form-interval" className="form-label">
                     Intervalle de répétition *

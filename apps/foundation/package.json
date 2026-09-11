@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "react-router dev --host 0.0.0.0 --port 3000",
+    "dev": "../../scripts/ensure-db.sh && react-router dev --host 0.0.0.0 --port 3000",
     "build": "react-router build",
     "preview": "vite preview",
     "deploy": "react-router build && wrangler deploy",
@@ -20,11 +20,14 @@
     "@supabase/supabase-js": "^2.116.0",
     "drizzle-orm": "^0.45.2",
     "isbot": "^5",
+    "lucide-react": "^1.16.0",
+    "motion": "^12.4.7",
     "pdf-lib": "^1.17.1",
     "pg": "^8.23.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router": "^8.3.1",
+    "recharts": "^2.15.1",
     "resend": "^6.26.0",
     "@sentry/cloudflare": "^10.74.0",
     "stripe": "^22.6.1"

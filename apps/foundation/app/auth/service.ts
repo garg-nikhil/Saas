@@ -4,6 +4,7 @@ import type { Env } from "../context";
 import { withDb } from "../db/client";
 import { profiles, type Profile } from "../db/schema/profiles";
 import { SupabaseAuthService } from "./supabase.server";
+import { LocalAuthService } from "./local.server";
 import type {
   AuthSession,
   AuthUser,
@@ -51,6 +52,43 @@ export function getSafeRedirectUrl(
 }
 
 /**
+ * Verifies if Supabase credentials are valid and not placeholders or empty.
+ */
+export function isSupabaseConfigured(
+  url?: string | null,
+  key?: string | null,
+): boolean {
+  if (!url || !key) return false;
+  const trimmedUrl = url.trim();
+  const trimmedKey = key.trim();
+  if (trimmedUrl.length === 0 || trimmedKey.length === 0) return false;
+
+  // Filter out placeholder domains and dummy values
+  if (
+    trimmedUrl.includes("placeholder-project") ||
+    trimmedUrl.includes("your-project-id") ||
+    trimmedKey.includes("placeholder-anon-key") ||
+    trimmedKey.includes("your-supabase-anon-key")
+  ) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(trimmedUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return false;
+    }
+    if (parsed.hostname === "placeholder-project.supabase.co") {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  return true;
+}
+
+/**
  * Creates the internal AuthService boundary instance for the current request.
  *
  * Encapsulates the responseHeaders collector to capture Set-Cookie headers
@@ -73,73 +111,31 @@ export function createAuthService(
   const supabaseUrl = env.SUPABASE_URL || process.env.SUPABASE_URL;
   const supabaseAnonKey = env.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
 
-  if (!supabaseUrl || !supabaseAnonKey) {
-    // Return a mock/safe unconfigured adapter when credentials are not yet injected
-    const unconfiguredAdapter: IAuthService = {
-      async getCurrentUser() {
-        return null;
+  if (supabaseUrl && supabaseAnonKey && isSupabaseConfigured(supabaseUrl, supabaseAnonKey)) {
+    const authService = new SupabaseAuthService(
+      request,
+      {
+        supabaseUrl,
+        supabaseAnonKey,
       },
-      async getCurrentSession() {
-        return null;
-      },
-      async signUp() {
-        return {
-          data: null,
-          error: {
-            message: "Le service d'authentification n'est pas encore configuré.",
-            status: 503,
-          },
-        };
-      },
-      async signIn() {
-        return {
-          data: null,
-          error: {
-            message: "Le service d'authentification n'est pas encore configuré.",
-            status: 503,
-          },
-        };
-      },
-      async signOut() {
-        return { data: undefined, error: null };
-      },
-      async requestPasswordReset() {
-        return {
-          data: null,
-          error: {
-            message: "Le service d'authentification n'est pas encore configuré.",
-            status: 503,
-          },
-        };
-      },
-      async updatePassword() {
-        return {
-          data: null,
-          error: {
-            message: "Le service d'authentification n'est pas encore configuré.",
-            status: 503,
-          },
-        };
-      },
-    };
+      responseHeaders,
+    );
 
     return {
-      authService: unconfiguredAdapter,
+      authService,
       responseHeaders,
     };
   }
 
-  const authService = new SupabaseAuthService(
+  // Fallback to local cookie-based session auth service
+  const localAuthService = new LocalAuthService(
     request,
-    {
-      supabaseUrl,
-      supabaseAnonKey,
-    },
     responseHeaders,
+    env?.HYPERDRIVE,
   );
 
   return {
-    authService,
+    authService: localAuthService,
     responseHeaders,
   };
 }

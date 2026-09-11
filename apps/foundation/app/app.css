@@ -1141,4 +1141,25 @@ code.info-value {
   }
 }
 
+.password-toggle-btn:hover {
+  background-color: rgba(148, 163, 184, 0.15) !important;
+  color: var(--color-primary, #0284c7) !important;
+}
+
+.password-toggle-btn:focus-visible {
+  outline: 2px solid var(--color-primary, #0284c7) !important;
+  outline-offset: 2px !important;
+}
+
+@keyframes slideInToast {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 

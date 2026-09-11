@@ -18,7 +18,7 @@
   ],
   "vars": {
     "ENVIRONMENT": "production",
-    "SUPABASE_URL": "https://placeholder-project.supabase.co",
-    "SUPABASE_ANON_KEY": "placeholder-anon-key"
+    "SUPABASE_URL": "",
+    "SUPABASE_ANON_KEY": ""
   }
 }

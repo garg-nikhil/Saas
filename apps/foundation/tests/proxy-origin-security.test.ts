@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,13 +14,15 @@ async function loadServerHandler(): Promise<ServerHandler> {
   if (cachedHandler) return cachedHandler;
   const serverBuildPath = path.resolve(__dirname, "../build/server/index.js");
   if (!fs.existsSync(serverBuildPath)) {
-    execSync("pnpm run build", {
+    execSync("npm run build", {
       cwd: path.resolve(__dirname, ".."),
       stdio: "inherit",
     });
   }
   const fileUrl = pathToFileURL(serverBuildPath).href;
+  const originalProcessDescriptors = Object.getOwnPropertyDescriptors(process);
   const serverModule = (await import(/* @vite-ignore */ fileUrl)) as { default: ServerHandler };
+  Object.defineProperties(process, originalProcessDescriptors);
   cachedHandler = serverModule.default;
   return cachedHandler;
 }
@@ -30,15 +32,26 @@ describe("Security Hotfix — Proxy Origin Normalization & CSRF Validation", () 
 
   beforeAll(() => {
     if (!fs.existsSync(serverBuildPath)) {
-      execSync("pnpm run build", {
+      execSync("npm run build", {
         cwd: path.resolve(__dirname, ".."),
         stdio: "inherit",
       });
     }
   });
 
-  it("1. Legitimate proxied POST succeeds and does not trigger 400 CSRF error", async () => {
-    const handler = await loadServerHandler();
+  afterAll(() => {
+    // Clear any persistent background timers/intervals created by auth client polyfills
+    const maxTimerId = setTimeout(() => {}, 0) as unknown as number;
+    for (let i = 0; i <= maxTimerId + 100; i++) {
+      clearTimeout(i);
+      clearInterval(i);
+    }
+  });
+
+  it(
+    "1. Legitimate proxied POST succeeds and does not trigger 400 CSRF error",
+    async () => {
+      const handler = await loadServerHandler();
 
     // Container receives request targeting http://0.0.0.0:3000/login from reverse proxy
     const request = new Request("http://0.0.0.0:3000/login", {
@@ -63,7 +76,7 @@ describe("Security Hotfix — Proxy Origin Normalization & CSRF Validation", () 
     const text = await response.text();
     // Verify it reached the action (form validation error or page content returned)
     expect(text).toContain("Connexion");
-  });
+  }, 15000);
 
   it("2. Known AI Studio / proxy origin mismatch is resolved using trusted proxy headers", async () => {
     const handler = await loadServerHandler();

@@ -59,11 +59,22 @@ export class SupabaseStorageAdapter implements IStorageAdapter {
   private isConfigured = false;
 
   constructor(private config: SupabaseStorageConfig) {
+    const url = config.supabaseUrl?.trim();
+    const key = config.supabaseKey?.trim();
+    const isPlaceholder =
+      !url ||
+      !key ||
+      url.includes("placeholder-project") ||
+      url.includes("your-project-id") ||
+      key.includes("placeholder-anon-key") ||
+      key.includes("your-supabase-anon-key");
+
     this.isConfigured = Boolean(
-      config.supabaseUrl &&
-        config.supabaseKey &&
-        config.supabaseUrl.trim().length > 0 &&
-        config.supabaseKey.trim().length > 0,
+      url &&
+        key &&
+        url.length > 0 &&
+        key.length > 0 &&
+        !isPlaceholder,
     );
   }
 
